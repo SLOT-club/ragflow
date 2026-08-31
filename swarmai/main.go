@@ -13,6 +13,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -37,6 +38,8 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		usage()
+		fmt.Fprintln(os.Stderr, "\nNon avviare swarmai direttamente con un doppio-clic: usa \"swarm.bat\" (o l'icona \"Swarm AI\" sul desktop), che sceglie il ruolo giusto da solo.")
+		pauseIfConsole()
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -355,6 +358,18 @@ func prettyJSON(b []byte) string {
 	}
 	out, _ := json.MarshalIndent(v, "", "  ")
 	return string(out)
+}
+
+// pauseIfConsole keeps a double-clicked console window open (Windows especially)
+// so the user can read the message instead of watching it flash and vanish. It
+// no-ops when stdin is piped/redirected, so scripts and pipes never block.
+func pauseIfConsole() {
+	fi, err := os.Stdin.Stat()
+	if err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+		return
+	}
+	fmt.Fprint(os.Stderr, "\nPremi Invio per chiudere…")
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 }
 
 func hostname() string {
