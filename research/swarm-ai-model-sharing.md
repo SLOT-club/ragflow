@@ -66,6 +66,46 @@ qualità: qui il calo di qualità non è ammesso, e la velocità si conquista al
 
 ---
 
+## 1-bis. Validazione empirica sull'hardware dell'owner (misure reali, non dedotte)
+
+Il progetto ha già una base sperimentale sul campo — benchmark misurati su un **Dell XPS 15 9500**
+(i7-10750H, 16 GB DDR4-3200, GTX 1650 Ti 4 GB, **senza tensor core**) — che confermano tre tesi
+portanti di questo documento e trasformano il rischio aperto principale in un dato.
+
+- **La regola della banda di memoria (§1.1) è confermata.** `tok/s ≈ banda_memoria / dimensione_file`
+  — ogni token rilegge tutti i pesi. Misure `llama-bench`: 4B Q6_K → **33 tok/s**; 9B Q4_K_M →
+  **8,7 tok/s**. E la RAM *libera* è ~9–10 GB su 16 (non 16): un modello che non entra pagina da disco
+  e, con pagefile piccolo, fa riavviare la macchina.
+
+- **La gerarchia di esperti MoE (M3) è validata, e la sua incognita chiave è ora misurata.** Un
+  **Qwen3.6-35B-A3B Q4_K da 20,22 GB gira su una macchina con ~9 GB di RAM libera a 11,2–11,7 tok/s**
+  — file più grande della RAM, ma velocità piena — grazie a `mmap` + page cache del SO, senza alcun
+  software speciale. Il working set di **un argomento** si ferma a **7,8 GB su 20,9 GB di esperti:
+  il 37,4%**. Questo *misura direttamente* il "hit-rate degli esperti" che il §6 elencava come rischio
+  #1. Regola pratica: un MoE gira non se «il file sta in RAM» ma se **«il 35–40% del file sta in RAM»**
+  — per un 35B servono ~8 GB liberi, non 20.
+  - **Ma la condizione è a gradino, non morbida** (conferma il churn-risk di M3): la località è
+    *locale all'argomento*; a ogni cambio di dominio si ricarica, e il crollo è da **33× a 57×** — o
+    il working set dell'argomento sta in cache, o il modello è inutilizzabile, senza terra di mezzo.
+    Ne esce una specifica precisa per il predittore di prefetch di M3: deve seguire il *dominio* della
+    conversazione, non i singoli token.
+  - Corollario hardware: il file da paginare va **sempre sul disco interno NVMe** (267 MB/s ad accessi
+    casuali da 64 KB) e mai su USB (6,8 MB/s, **39× più lento**) — il costo non è il caricamento
+    iniziale ma **ogni cambio di argomento**.
+
+- **La cache di prefisso KV (M10) è la leva più grande, misurata.** Stesso stack, stesso compito: una
+  tool call sul 4B passa da **187 s a cache fredda a 21 s a cache calda** (il prompt di sistema di un
+  harness pesa ~8k token identici a ogni turno, e dal secondo turno il prefill sparisce). Regola
+  operativa: **misura il secondo turno, non il primo**, e scalda il server con una chiamata a vuoto.
+  Su hardware modesto questa leva conta più del modello e più di `-ngl`.
+
+Conclusione: le fondamenta di questo documento (muro di banda §1.1, gerarchia esperti M3, cache di
+prefisso M10) non sono teoria — sono **già state osservate sull'hardware bersaglio**. Il salto ancora
+da dimostrare è il passaggio dalla *singola macchina* allo *swarm* (M2 verifica-remota + cellula LAN),
+che è esattamente il prossimo prototipo.
+
+---
+
 ## 2. Bibliografia valutata
 
 Ogni voce riporta cosa fa, i numeri chiave e il **limite** che le impedisce, da sola, di risolvere il
@@ -458,7 +498,9 @@ estensione del retrieval.
 ## 6. Rischi trasversali e domande aperte
 
 1. **Hit-rate reale degli esperti** sui MoE di frontiera con uso personale: è la variabile che decide
-   quanto M3 scala oltre la LAN. Va misurata subito (fase 2), su tracce d'uso vere.
+   quanto M3 scala oltre la LAN. **Prima misura già disponibile** (§1-bis): su Qwen3.6-35B-A3B il
+   working set di un argomento è il **37,4%** del file, con crollo a gradino al cambio di dominio. Resta
+   da confermare su MoE più grandi e su tracce d'uso multi-argomento reali (fase 2).
 2. **Accept-rate del draft locale** su compiti difficili (decide il throughput M2). Mitigato dal
    gate M1 e dai draft distillati M9 (che migliorano proprio dove l'accept-rate è basso).
 3. **App store e background compute** (condiziona M8 su iOS in particolare) → APK/F-Droid, browser,
