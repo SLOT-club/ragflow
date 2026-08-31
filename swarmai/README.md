@@ -27,6 +27,13 @@ Modulo Go autonomo (non tocca la build nativa di RAGFlow). Costruito su [libp2p]
   inserire o cambiare pochi byte reshapa solo i chunk locali, il resto resta identico e condivisibile.
   Verificato: fetch byte-identico via P2P; e dopo un'inserzione di byte il CDC mantiene il 99% dei chunk
   condivisi contro il 2% della taglia fissa.
+- **Fetch on-demand per esperto** (`internal/node/expert.go`): un manifest può portare una mappa
+  **parte→intervallo di byte** (esperto/layer). Un nodo richiede **solo i chunk che coprono la parte
+  attiva**, non il file intero, li assembla e ne estrae i byte esatti. Una **cache LRU degli esperti**
+  in RAM (policy FreeToken) tiene residenti quelli caldi e streama i freddi dai peer — così un modello
+  molto più grande della RAM resta usabile finché il working set entra nel budget. `Prefetch` scalda in
+  anticipo gli esperti che il router MoE prevede. Verificato: fetch di un solo esperto con cache ≪
+  dimensione del modello.
 - **Cellula LAN via llama.cpp RPC** (`internal/cell`, protocollo `/swarmai/rpc/1.0.0`). Più nodi fanno
   girare insieme un modello che non sta su una macchina sola. Punto critico di **sicurezza**: la porta
   di `rpc-server` non ha autenticazione e ha avuto una RCE (CVE-2026-34159), quindi swarmai **non la
@@ -80,6 +87,8 @@ Condividere e streamare un modello fra nodi:
 swarmai model share ./qwen3.5-4b-q6_k.gguf   # su un nodo: chunk + seed, stampa il manifest id
 swarmai model list                            # vedere chi seeda cosa
 swarmai model fetch <manifest-id> -o ./m.gguf # su un altro nodo: streama a pezzi dai peer, verifica
+swarmai model part <manifest-id> <nome-parte>  # scarica SOLO i chunk di un esperto/layer
+swarmai model cache                            # uso della cache degli esperti caldi
 ```
 
 Formare una cellula LAN (un modello su più macchine):
@@ -104,24 +113,24 @@ curl "http://127.0.0.1:4780/run?prompt=ciao"   # A (senza modello) -> servito da
 ```
 
 ## Prossimi milestone (dal piano e dalla ricerca in `research/swarm-ai-tech-integration.md`)
-1. **Fetch on-demand per esperto** (non a file intero): richiesta dei soli esperti/layer attivi (per
-   intervallo o per sotto-manifest) con prefetch predittivo guidato dal router MoE. Il chunking
-   content-defined (GearHash) per la dedup fra versioni è **già fatto** (`internal/blob`); manca il
-   mapping esperto→chunk e la richiesta selettiva.
+1. **Parser di layout GGUF**: derivare automaticamente la mappa parte→intervallo dai tensori di un
+   `.gguf` (oggi la mappa si passa a mano a `ShareModelWithParts`), e **integrare il prefetch col router
+   MoE** reale così gli esperti del prossimo token arrivano prima che servano.
 2. **Riabilitare QUIC** aggiornando go-libp2p/quic-go (oggi TCP-only per aggirare un panic di quic-go
    sotto Go 1.26); poi PSK/pnet per la cella di amici e TOPLOC per lo swarm pubblico.
 3. **Sandbox** dei task non fidati (seccomp/Landlock attorno all'inferenza, wasmtime per il codice di
    orchestrazione) e **costo d'identità** anti-Sybil per lo swarm aperto.
 4. **Nodo browser via WebRTC (M12)**.
 
-(Cellula LAN via llama.cpp RPC, Draft→verify M2, e fiducia locale — kudos + ridondanza + reputazione —
-sono **già implementati e verificati**, vedi sopra.)
+(Cellula LAN via llama.cpp RPC, Draft→verify M2, fiducia locale, chunking CDC e fetch on-demand per
+esperto con cache LRU sono **già implementati e verificati**, vedi sopra.)
 
 ## Architettura (file)
 - `main.go` — CLI (`node start`, `peers`, `status`, `run`, `model share|fetch|list`).
 - `internal/node/` — host libp2p, scoperta, gossip, registro peer, protocollo infer (`infer.go`) +
   esecuzione ridondante, streaming dei pesi (`stream.go`), draft→verify (`speculative.go`).
-- `internal/blob/` — chunking content-addressed e chunk store locale.
+- `internal/blob/` — chunking content-defined (GearHash), chunk store, cache LRU degli esperti.
+- `internal/node/expert.go` — fetch on-demand per parte + prefetch + gerarchia cache→disco→rete.
 - `internal/cell/` — cellula LAN via llama.cpp RPC + tunnel sicuro loopback↔libp2p.
 - `internal/verify/` — pattern draft→verify (M2): prompt di verifica e interpretazione del verdetto.
 - `internal/trust/` — ledger kudos + reputazione (replica adattiva).

@@ -4,6 +4,7 @@ package control
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -34,6 +35,8 @@ func NewServer(n *node.Node, addr string) *Server {
 	mux.HandleFunc("/cell/prepare", s.handleCellPrepare)
 	mux.HandleFunc("/draft", s.handleDraft)
 	mux.HandleFunc("/credits", s.handleCredits)
+	mux.HandleFunc("/part", s.handlePart)
+	mux.HandleFunc("/cache", s.handleCache)
 	s.http = &http.Server{Addr: addr, Handler: mux}
 	return s
 }
@@ -113,6 +116,38 @@ func (s *Server) handleDraft(w http.ResponseWriter, r *http.Request) {
 // handleCredits returns this node's local reputation ledger.
 func (s *Server) handleCredits(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.node.Credits())
+}
+
+// handlePart fetches one named model part (expert/layer) on demand, streaming
+// only the chunks that cover it.
+func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	part := r.URL.Query().Get("part")
+	if id == "" || part == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "need id and part"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+	b, from, err := s.node.FetchPartAuto(ctx, id, part, r.URL.Query().Get("from"))
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]string{"error": err.Error()})
+		return
+	}
+	used, budget, count := s.node.ExpertCacheStats()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"part":         part,
+		"bytes":        len(b),
+		"preview_hex":  hex.EncodeToString(b[:min(32, len(b))]),
+		"fetched_from": from,
+		"cache":        map[string]any{"used": used, "budget": budget, "chunks": count},
+	})
+}
+
+// handleCache reports the hot-expert cache usage.
+func (s *Server) handleCache(w http.ResponseWriter, _ *http.Request) {
+	used, budget, count := s.node.ExpertCacheStats()
+	writeJSON(w, http.StatusOK, map[string]any{"used": used, "budget": budget, "chunks": count})
 }
 
 // handleShare chunks a local file and starts seeding it, returning its manifest.

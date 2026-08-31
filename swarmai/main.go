@@ -73,8 +73,10 @@ Commands:
   draft "text"      draft locally, verify/correct on a stronger peer (M2)
   credits           show the local reputation ledger (kudos + agreement)
   model share PATH  chunk + seed a model file, print its manifest id
-  model fetch ID    stream a model from a seeding peer (-o OUT)
+  model fetch ID    stream a whole model from a seeding peer (-o OUT)
+  model part ID N   fetch only the chunks of one named part (expert/layer)
   model list        show models seeded locally and by peers
+  model cache       show the hot-expert cache usage
   cell prepare      set up a LAN cell (llama.cpp RPC) over worker peers
 
 Run "swarmai node start -h" for node flags.
@@ -138,6 +140,23 @@ func cmdModel(args []string) {
 		port := fs.Int("port", 4779, "node port whose control api to use")
 		_ = fs.Parse(args[1:])
 		fmt.Println(prettyJSON(get(fmt.Sprintf("http://%s/models", control.DefaultControlAddr(*port)))))
+	case "part":
+		fs := flag.NewFlagSet("model part", flag.ExitOnError)
+		port := fs.Int("port", 4779, "node port whose control api to use")
+		from := fs.String("from", "", "peer id to fetch from (optional)")
+		_ = fs.Parse(args[1:])
+		if fs.NArg() < 2 {
+			fmt.Fprintln(os.Stderr, "usage: swarmai model part <manifest-id> <part-name> [--from <peer>]")
+			os.Exit(2)
+		}
+		u := fmt.Sprintf("http://%s/part?id=%s&part=%s&from=%s",
+			control.DefaultControlAddr(*port), url.QueryEscape(fs.Arg(0)), url.QueryEscape(fs.Arg(1)), url.QueryEscape(*from))
+		fmt.Println(prettyJSON(get(u)))
+	case "cache":
+		fs := flag.NewFlagSet("model cache", flag.ExitOnError)
+		port := fs.Int("port", 4779, "node port whose control api to use")
+		_ = fs.Parse(args[1:])
+		fmt.Println(prettyJSON(get(fmt.Sprintf("http://%s/cache", control.DefaultControlAddr(*port)))))
 	default:
 		fmt.Fprintf(os.Stderr, "unknown model subcommand %q\n", args[0])
 		os.Exit(2)

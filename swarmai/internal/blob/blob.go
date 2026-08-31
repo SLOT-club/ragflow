@@ -124,12 +124,58 @@ type Chunk struct {
 	Size int    `json:"s"`
 }
 
-// Manifest describes a file as an ordered list of content-addressed chunks.
+// Range is a byte range within a file: a named model part (an expert, a layer)
+// maps to one of these so it can be fetched without the whole file.
+type Range struct {
+	Offset int64 `json:"o"`
+	Length int64 `json:"l"`
+}
+
+// Manifest describes a file as an ordered list of content-addressed chunks, and
+// optionally a map of named parts (e.g. "blk.3.ffn_up.12") to byte ranges so a
+// fetcher can pull only the experts/layers a given inference actually needs.
 type Manifest struct {
-	ID        string  `json:"id"`         // sha256 of the manifest's content
-	Name      string  `json:"name"`       // human name (e.g. model file name)
-	TotalSize int64   `json:"total_size"` // bytes
-	Chunks    []Chunk `json:"chunks"`     // content-defined chunks, in order
+	ID        string           `json:"id"`              // sha256 of the manifest's content
+	Name      string           `json:"name"`            // human name (e.g. model file name)
+	TotalSize int64            `json:"total_size"`      // bytes
+	Chunks    []Chunk          `json:"chunks"`          // content-defined chunks, in order
+	Parts     map[string]Range `json:"parts,omitempty"` // named byte ranges (model layout)
+}
+
+// chunkOffsets returns the start byte offset of each chunk plus the file end.
+func (m *Manifest) chunkOffsets() []int64 {
+	offs := make([]int64, len(m.Chunks)+1)
+	var acc int64
+	for i, ch := range m.Chunks {
+		offs[i] = acc
+		acc += int64(ch.Size)
+	}
+	offs[len(m.Chunks)] = acc
+	return offs
+}
+
+// ChunksForRange returns the indices of the chunks overlapping [off, off+length)
+// and the byte offset at which the first of them starts, so a caller can
+// assemble those chunks and slice out the exact range.
+func (m *Manifest) ChunksForRange(off, length int64) (indices []int, firstChunkOffset int64) {
+	end := off + length
+	offs := m.chunkOffsets()
+	first := true
+	for i := range m.Chunks {
+		cs, ce := offs[i], offs[i+1]
+		if ce <= off {
+			continue
+		}
+		if cs >= end {
+			break
+		}
+		if first {
+			firstChunkOffset = cs
+			first = false
+		}
+		indices = append(indices, i)
+	}
+	return indices, firstChunkOffset
 }
 
 func (m *Manifest) computeID() string {
@@ -255,6 +301,20 @@ func (s *Store) AddManifest(m *Manifest) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.manifests[m.ID] = m
+}
+
+// AttachParts annotates a stored manifest with a part→byte-range layout so it
+// can be fetched per expert/layer. Parts are metadata and do not change the
+// manifest's content id.
+func (s *Store) AttachParts(id string, parts map[string]Range) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.manifests[id]
+	if !ok {
+		return fmt.Errorf("manifest %s not held", short(id))
+	}
+	m.Parts = parts
+	return nil
 }
 
 // ReadChunk returns the bytes of a chunk this node holds.

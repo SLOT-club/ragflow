@@ -61,6 +61,7 @@ type Node struct {
 	topic    *pubsub.Topic
 	reg      *Registry
 	blobs    *blob.Store
+	experts  *blob.Cache
 	credits  *trust.Ledger
 	backend  backend.Backend
 	name     string
@@ -109,6 +110,7 @@ func New(ctx context.Context, cfg Config) (*Node, error) {
 		Host:     h,
 		reg:      NewRegistry(90 * time.Second),
 		blobs:    blob.NewStore(),
+		experts:  blob.NewCache(0),
 		credits:  trust.NewLedger(),
 		backend:  be,
 		name:     cfg.Name,
