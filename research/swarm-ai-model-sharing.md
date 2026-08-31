@@ -233,6 +233,21 @@ plug-in LoRA intercambiabili. E **si compone con l'out-of-core (§1-ter)**: prim
 meno pesi), poi streamma ciò che resta. La domanda smette di essere «come faccio a far entrare i 2 TB» e
 diventa **«quanto poco deve stare nei pesi, e cosa può fornire il sistema al posto loro?»**
 
+**Nota — "2 TB" non è una legge, è un codice (e questo è il vero spiraglio).** Il numero di bit che una
+cosa occupa **non è assoluto**: dipende dal *codice* con cui la rappresenti. È il senso della complessità
+di Kolmogorov — la lunghezza del programma più corto che la genera. I pesi grezzi di un modello sembrano
+quasi casuali *sotto la codifica ingenua* "un float per parametro", e sotto **quella** codifica il limite
+di Shannon è reale e non si aggira (non puoi comprimere 2 TB di informazione indipendente in 16 GB
+residenti senza perdere nulla — questo resta un teorema, non una convenzione). Ma la *funzione* che il
+modello calcola ha complessità **molto più bassa** dei suoi byte grezzi — lo dimostra la distillazione,
+che trova letteralmente un programma più corto per la stessa funzione. Quindi la stazza non è sacra: è
+l'artefatto di **un codice inefficiente**. Ciò che è davvero incomprimibile non è il file da 2 TB, è la
+complessità della *capacità* — e da quella siamo **lontanissimi**. Attaccare la rappresentazione
+(architetture sparse / memory-layer, distillazione, disaccoppiamento §1-quater) non viola nessun teorema:
+usa la teoria dell'informazione *nel verso giusto*, mettendo pochi bit dove pochi bastano. La cosa
+"impossibile" (battere Shannon a codice fisso) non è ciò che serve; la cosa che serve (rappresentare la
+stessa capacità con molti meno bit) è **aperta e in corso**.
+
 ---
 
 ## 2. Bibliografia valutata
