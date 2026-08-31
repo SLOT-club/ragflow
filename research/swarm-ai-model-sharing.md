@@ -171,6 +171,70 @@ predittore di M3, generalizzato dai soli esperti MoE a *ogni* peso attivo.
 
 ---
 
+## 1-quater. Ripensare cosa "pesa" davvero in un modello
+
+La domanda vera dietro «perché un byte del modello occupa così tanto?» è: *quanta di quella stazza è
+informazione, e quanta è spreco che un sistema esterno può assorbire?* Tre chiarimenti sciolgono il nodo.
+
+**A. "Grande per addestrare" ≠ "grande per girare" ≠ "informazione contenuta": tre numeri diversi.**
+- *Addestramento*: ogni parametro trascina ~12–20 byte, non 2 — il peso in BF16 **più** il gradiente
+  **più** i due momenti dell'ottimizzatore (Adam) **più** le attivazioni per il backprop. Ecco perché
+  addestrare costa 6–10× più memoria che *eseguire*. È contabilità del processo, non del modello.
+- *Artefatto*: i pesi da soli, 2 byte/param (BF16) o ~0,5 (4 bit).
+- *Informazione reale*: molto meno — lo prova il fatto stesso che quantizzazione, pruning e
+  distillazione funzionano senza distruggere il modello.
+
+**B. Capacità ≫ contenuto: i modelli sono enormemente sovra-parametrizzati.** Prove convergenti:
+- *Lottery ticket*: esistono sotto-reti sparse che eguagliano l'accuratezza piena.
+- *Dimensione intrinseca*: il fine-tuning riesce dentro un sottospazio di poche centinaia/migliaia di
+  dimensioni — per questo **LoRA** funziona (l'aggiornamento che specializza un modello è di rango
+  basso, cioè *piccolo*).
+- *Superposizione* (interpretabilità): la conoscenza non è un-fatto-per-neurone, è spalmata su molti
+  parametri — per questo non puoi cancellarli in modo pulito, ma per questo c'è tanta ridondanza da
+  sfruttare.
+- Conclusione: il conteggio dei byte è una *capacità*, in gran parte inutilizzata. Lì è il margine.
+
+**C. La riformulazione decisiva: "dimensione" impacchetta tre cose separabili.** Un modello denso
+gigante fonde tre cose che non devono stare tutte nei pesi:
+1. **Conoscenza / fatti** → meglio *esternalizzarli al retrieval* (RAG). I fatti non appartengono ai
+   pesi: un database li tiene lossless e *aggiornabili*. È letteralmente RAGFlow. Un modello piccolo con
+   buon retrieval "sa" più di un modello enorme coi fatti congelati.
+2. **Profondità di ragionamento** → *amplificabile a inference-time* invece che immagazzinata.
+   DeepSeek-R1 ha eguagliato o1 **pensando 10–100× più a lungo, non essendo più grande**. Modello
+   piccolo + calcolo al momento (ricerca, self-consistency, verifica) raggiunge capacità che il solo
+   addestramento non dà. "Migliorare il modello con un sistema" = spendere *compute*, non parametri.
+3. **Il nucleo linguistico/di ragionamento** → questo sì vive nei pesi, ma è molto più piccolo di quanto
+   il conteggio totale suggerisca, ed è l'unica parte davvero incomprimibile.
+
+Il design efficiente **disaccoppia** i tre: nucleo compatto + memoria esterna di retrieval + strumenti +
+ricerca a inference-time + adattatori a innesto. È "più piccolo, uguale o migliore, tramite un sistema".
+
+**Il "plug-in studiato per DeepSeek" reso concreto** (tutto senza gonfiare i pesi):
+- **Adattatori LoRA come plug-in**: un base grande + molti adattatori minuscoli (pochi MB l'uno) da
+  innestare per compito. Immagazzini *un* base + N plug-in invece di N modelli giganti.
+- **RAG** per la conoscenza (RAGFlow).
+- **Strumenti** (calcolatrice, codice, ricerca): il modello non deve codificare l'aritmetica né i fatti
+  freschi.
+- **Harness/scaffolding** (il tuo DeepSeek Harness): verificatori, critici, loop agentico, decoding
+  speculativo (M2) — stessi pesi, resi più capaci dal sistema attorno.
+- **Distillazione**: addestrare un modello piccolo a imitare la *funzione* del grande — spesso ci arriva
+  vicino perché la funzione è più semplice del conteggio dei parametri.
+
+**Onestà sui limiti.** C'è un nucleo incomprimibile; il calcolo a inference-time si paga in *latenza ed
+energia* (e "ragionare troppo" a volte peggiora — risultato misurato nel 2026); il retrieval aiuta la
+conoscenza, non il ragionamento puro; la distillazione perde sulla coda lunga. Ogni spostamento ha un
+costo da misurare — ma sposta spesa da un budget caro (parametri in RAM) a budget economici (storage per
+i fatti, compute per il ragionamento, MB per la specializzazione).
+
+**Sintesi per il progetto.** Il "modello" più efficiente per hardware povero non è un monolite
+compresso: è un *nucleo piccolo + un sistema* — modello compatto di ragionamento, RAG (RAGFlow) per la
+conoscenza, strumenti, calcolo a inference-time dosato dalla difficoltà (è il gate della cascata M1), e
+plug-in LoRA intercambiabili. E **si compone con l'out-of-core (§1-ter)**: prima disaccoppia (servono
+meno pesi), poi streamma ciò che resta. La domanda smette di essere «come faccio a far entrare i 2 TB» e
+diventa **«quanto poco deve stare nei pesi, e cosa può fornire il sistema al posto loro?»**
+
+---
+
 ## 2. Bibliografia valutata
 
 Ogni voce riporta cosa fa, i numeri chiave e il **limite** che le impedisce, da sola, di risolvere il
@@ -632,3 +696,12 @@ estensione del retrieval.
 [Mixture of a Million Experts / PEER (arXiv 2407.04153)](https://arxiv.org/abs/2407.04153) ·
 [Ultra-Sparse Memory Network (arXiv 2411.12364)](https://arxiv.org/pdf/2411.12364) ·
 [llama.cpp — streaming esperti MoE da disco (PR #25294)](https://github.com/ggml-org/llama.cpp/pull/25294)
+
+**Cosa "pesa" in un modello (base di §1-quater)**:
+[Aghajanyan et al. — Intrinsic Dimensionality del fine-tuning (arXiv 2012.13255)](https://arxiv.org/abs/2012.13255) ·
+[LoRA (arXiv 2106.09685)](https://arxiv.org/abs/2106.09685) ·
+[Lottery Ticket Hypothesis (arXiv 1803.03635)](https://arxiv.org/abs/1803.03635) ·
+[Anthropic — Toy Models of Superposition](https://transformer-circuits.pub/2022/toy_model/index.html) ·
+[DeepSeek-R1 — test-time compute via RL (arXiv 2501.12948)](https://arxiv.org/abs/2501.12948) ·
+[Revisiting Test-Time Scaling (arXiv 2506.04611)](https://arxiv.org/pdf/2506.04611) ·
+[When More Thinking Hurts — overthinking (arXiv 2604.10739)](https://arxiv.org/html/2604.10739v1)
