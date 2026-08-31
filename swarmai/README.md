@@ -188,16 +188,14 @@ chiunque, senza port-forward:
 swarmai node start --join <TOKEN>   # NAT ok: prenota un circuito sul relay dell'invitante
 ```
 
-> Note: oggi il trasporto è **TCP + Noise** (QUIC in attesa di aggiornare la dipendenza), con
-> hole-punching e relay attivi. Il **nodo browser (WebRTC/WebGPU)** — onboarding a zero-installazione
-> per iOS/desktop — è in roadmap (dipende dalla riabilitazione di QUIC/WebRTC).
+> Note: i trasporti sono **TCP e QUIC** (entrambi con cifratura), con hole-punching e relay attivi.
+> Il **nodo browser (WebRTC/WebGPU)** — onboarding a zero-installazione per iOS/desktop — è in roadmap.
 
 ## Prossimi milestone (dal piano e dalla ricerca in `research/swarm-ai-tech-integration.md`)
 1. **Integrare il prefetch col router MoE reale**: agganciare `Prefetch` alle attivazioni degli esperti
    di `llama-server` (o del backend) così gli esperti del prossimo token si streamano prima di servire.
    Il layout GGUF che dice *dove* sta ogni esperto è **già fatto** (`internal/gguf`).
-2. **Nodo browser (WebRTC/WebGPU)** per onboarding a zero-installazione, e **riabilitare QUIC**
-   aggiornando go-libp2p/quic-go (oggi TCP-only per aggirare un panic di quic-go sotto Go 1.26).
+2. **Nodo browser (WebRTC/WebGPU)** per onboarding a zero-installazione (iOS/desktop senza binario).
 3. **Sandbox** dei task non fidati (seccomp/Landlock attorno all'inferenza, wasmtime per il codice di
    orchestrazione) e **costo d'identità** anti-Sybil per lo swarm aperto.
 4. **Nodo browser via WebRTC (M12)**.

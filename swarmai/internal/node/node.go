@@ -31,7 +31,6 @@ import (
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 	relayv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
-	tcp "github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -95,15 +94,15 @@ func New(ctx context.Context, cfg Config) (*Node, error) {
 	}
 
 	port := cfg.ListenPort
-	// TCP-only transport with Noise security. QUIC is intentionally disabled:
-	// the quic-go version pinned by this go-libp2p release panics under Go 1.26
-	// ("where's my session ticket?"). Re-enable QUIC once the dependency is
-	// upgraded. TCP + Noise works across LAN and WAN and through relays.
-	listen := []string{fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port)}
+	// Listen on both TCP and QUIC (default transports). QUIC gives faster
+	// handshakes and better NAT hole-punching; TCP is the universal fallback.
+	listen := []string{
+		fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port),
+		fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", port),
+	}
 
 	opts := []libp2p.Option{
 		libp2p.Identity(priv),
-		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.ListenAddrStrings(listen...),
 		libp2p.NATPortMap(),
 		libp2p.EnableRelay(),
@@ -227,7 +226,7 @@ func (n *Node) PrepareCell(workerIDs []string) (rpcArg, tensorSplit string, err 
 
 // setupDHT starts a Kademlia DHT in server mode and bootstraps it.
 func (n *Node) setupDHT(ctx context.Context, extra []string) error {
-	kad, err := dht.New(ctx, n.Host, dht.Mode(dht.ModeServer))
+	kad, err := dht.New(n.Host, dht.Mode(dht.ModeServer))
 	if err != nil {
 		return fmt.Errorf("dht: %w", err)
 	}
