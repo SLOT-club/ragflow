@@ -37,6 +37,7 @@ func NewServer(n *node.Node, addr string) *Server {
 	mux.HandleFunc("/credits", s.handleCredits)
 	mux.HandleFunc("/part", s.handlePart)
 	mux.HandleFunc("/cache", s.handleCache)
+	mux.HandleFunc("/ask", s.handleAsk)
 	s.http = &http.Server{Addr: addr, Handler: mux}
 	return s
 }
@@ -148,6 +149,18 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCache(w http.ResponseWriter, _ *http.Request) {
 	used, budget, count := s.node.ExpertCacheStats()
 	writeJSON(w, http.StatusOK, map[string]any{"used": used, "budget": budget, "chunks": count})
+}
+
+// handleAsk answers as a routed, cross-checked ensemble ("combo").
+func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
+	prompt := r.URL.Query().Get("prompt")
+	if prompt == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing prompt"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+	writeJSON(w, http.StatusOK, s.node.RunEnsemble(ctx, prompt))
 }
 
 // handleShare chunks a local file and starts seeding it, returning its manifest.

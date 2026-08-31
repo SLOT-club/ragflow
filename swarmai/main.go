@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/slot-club/swarmai/internal/backend"
@@ -47,6 +48,8 @@ func main() {
 		cmdRun(os.Args[2:])
 	case "draft":
 		cmdDraft(os.Args[2:])
+	case "ask":
+		cmdAsk(os.Args[2:])
 	case "credits":
 		cmdQuery("credits", os.Args[2:])
 	case "model":
@@ -70,6 +73,7 @@ Commands:
   peers             list capability cards of discovered peers
   status            show this node's own card and addresses
   run "text"        answer a prompt (add --redundancy N for majority verification)
+  ask "text"        combo: route by difficulty/domain, cross-check between models
   draft "text"      draft locally, verify/correct on a stronger peer (M2)
   credits           show the local reputation ledger (kudos + agreement)
   model share PATH  chunk + seed a model file, print its manifest id
@@ -178,6 +182,8 @@ func cmdNode(args []string) {
 	rpcWorker := fs.Bool("rpc-worker", false, "act as a llama.cpp RPC worker for LAN cells")
 	rpcBin := fs.String("rpc-bin", "", "path to llama.cpp rpc-server binary (optional)")
 	rpcPort := fs.Int("rpc-port", 50052, "loopback port for the RPC worker")
+	tier := fs.String("tier", "", "model tier for ensemble routing: small|medium|large")
+	tags := fs.String("tags", "", "comma-separated domains this model is good at (e.g. code,math)")
 	var bootstrap multiFlag
 	fs.Var(&bootstrap, "bootstrap", "extra bootstrap peer multiaddr (repeatable)")
 	_ = fs.Parse(args[1:])
@@ -200,6 +206,8 @@ func cmdNode(args []string) {
 		RPCWorker:    *rpcWorker,
 		RPCServerBin: *rpcBin,
 		RPCPort:      *rpcPort,
+		Tier:         *tier,
+		Tags:         splitCSV(*tags),
 	})
 	if err != nil {
 		log.Fatalf("start node: %v", err)
@@ -250,6 +258,32 @@ func cmdRun(args []string) {
 	u := fmt.Sprintf("http://%s/run?prompt=%s&model=%s&redundancy=%d",
 		control.DefaultControlAddr(*port), url.QueryEscape(prompt), url.QueryEscape(*model), *redundancy)
 	fmt.Println(prettyJSON(get(u)))
+}
+
+// cmdAsk answers as a routed, cross-checked ensemble ("combo").
+func cmdAsk(args []string) {
+	fs := flag.NewFlagSet("ask", flag.ExitOnError)
+	port := fs.Int("port", 4779, "node port whose control api to query")
+	_ = fs.Parse(args)
+	rest := fs.Args()
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, `usage: swarmai ask "your question"`)
+		os.Exit(2)
+	}
+	u := fmt.Sprintf("http://%s/ask?prompt=%s",
+		control.DefaultControlAddr(*port), url.QueryEscape(rest[0]))
+	fmt.Println(prettyJSON(get(u)))
+}
+
+// splitCSV splits a comma-separated flag value into a trimmed, non-empty list.
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // cmdDraft answers a prompt with draft->verify (M2): draft locally, verify on a peer.

@@ -27,10 +27,22 @@ type CapabilityCard struct {
 	RAMFreeMB  uint64          `json:"ram_free_mb"`
 	Backend    string          `json:"backend"`   // "llama-server" | "stub"
 	Model      string          `json:"model"`     // served model, if any
+	Tier       string          `json:"tier"`      // small|medium|large (capability/cost)
+	Tags       []string        `json:"tags"`      // domains this model is good at (code, math, …)
 	CanInfer   bool            `json:"can_infer"` // backend available now
 	Schedule   string          `json:"schedule"`  // idle|night|always|manual
 	Seeds      []blob.SeedInfo `json:"seeds"`     // models this node seeds for streaming
 	UnixTime   int64           `json:"unix_time"`
+}
+
+// hasTag reports whether the card advertises a given domain tag.
+func (c CapabilityCard) hasTag(tag string) bool {
+	for _, t := range c.Tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
 }
 
 // stale returns true if the card is older than ttl.

@@ -51,6 +51,10 @@ type Config struct {
 	RPCWorker    bool
 	RPCServerBin string // path to llama.cpp rpc-server (optional)
 	RPCPort      int    // loopback port for rpc-server (default 50052)
+
+	// Ensemble routing metadata about this node's model.
+	Tier string   // small|medium|large
+	Tags []string // domains this model is good at (code, math, …)
 }
 
 // Node is a running swarmai peer.
@@ -66,6 +70,8 @@ type Node struct {
 	backend  backend.Backend
 	name     string
 	schedule string
+	tier     string
+	tags     []string
 
 	mu    sync.Mutex
 	coord *cell.Coordinator
@@ -115,6 +121,8 @@ func New(ctx context.Context, cfg Config) (*Node, error) {
 		backend:  be,
 		name:     cfg.Name,
 		schedule: sched,
+		tier:     cfg.Tier,
+		tags:     cfg.Tags,
 	}
 
 	h.SetStreamHandler(InferProtocol, n.handleInferStream)
@@ -336,6 +344,8 @@ func (n *Node) publishCard(ctx context.Context) {
 	card.Model = n.backend.Model()
 	card.CanInfer = n.backend.Available() && n.backend.Name() != "stub"
 	card.Schedule = n.schedule
+	card.Tier = n.tier
+	card.Tags = n.tags
 	card.Seeds = n.blobs.Seeds()
 	card.UnixTime = time.Now().Unix()
 
@@ -367,6 +377,8 @@ func (n *Node) SelfCard() CapabilityCard {
 	card.Model = n.backend.Model()
 	card.CanInfer = n.backend.Available() && n.backend.Name() != "stub"
 	card.Schedule = n.schedule
+	card.Tier = n.tier
+	card.Tags = n.tags
 	card.Seeds = n.blobs.Seeds()
 	return card
 }

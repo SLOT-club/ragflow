@@ -52,6 +52,13 @@ Modulo Go autonomo (non tocca la build nativa di RAGFlow). Costruito su [libp2p]
   richiesta a più peer, prende la maggioranza, accredita chi concorda e segna chi diverge (stile BOINC);
   la reputazione modula la **replica adattiva** (peer nuovi più controllati, peer provati meno).
   Verificato: 2 verificatori concordi, entrambi accreditati.
+- **Ensemble "combo"** (`internal/route` + `internal/node/ensemble.go`): un gate classifica la domanda
+  per **difficoltà** (semplice→modello piccolo economico, difficile→modello grande) e **dominio** (usa
+  il modello taggato per quell'argomento, es. `code`/`math`), poi fa **controllo incrociato fra modelli
+  diversi**: un modello (di norma più piccolo/economico) verifica la risposta di un altro. Se concordano
+  → alta confidenza **senza rifare il lavoro**; se discordano → un terzo modello forte fa da **arbitro**.
+  L'accordo corto-circuita, quindi il caso comune costa poco. Verificato: percorso "verified" (accordo)
+  e "adjudicated" (disaccordo → arbitro).
 
 ## Build e test
 ```bash
@@ -83,7 +90,12 @@ swarmai peers                  # capacità dei peer scoperti
 swarmai run "quanto fa 2+2"    # instradato al miglior nodo capace
 swarmai run "domanda" --redundancy 3   # esegue su 3 peer e prende la maggioranza
 swarmai draft "quanto fa 6x7"  # bozza locale, verificata/corretta da un peer forte (M2)
+swarmai ask "dimostra passo passo perché 6*7=42"  # combo: routing + controllo incrociato fra modelli
 swarmai credits                # ledger locale: crediti + accordo per peer
+```
+Un nodo dichiara la classe e i domini del suo modello all'avvio:
+```bash
+swarmai node start --llama http://127.0.0.1:8080 --model qwen3.5-4b --tier small --tags code,general
 ```
 
 Condividere e streamare un modello fra nodi:
@@ -138,6 +150,8 @@ esperto con cache LRU e layout GGUF automatico sono **già implementati e verifi
 - `internal/node/expert.go` — fetch on-demand per parte + prefetch + gerarchia cache→disco→rete.
 - `internal/cell/` — cellula LAN via llama.cpp RPC + tunnel sicuro loopback↔libp2p.
 - `internal/verify/` — pattern draft→verify (M2): prompt di verifica e interpretazione del verdetto.
+- `internal/route/` — classificatore difficoltà/dominio e ordinamento per tier.
+- `internal/node/ensemble.go` — orchestrazione combo: routing + controllo incrociato + arbitro.
 - `internal/trust/` — ledger kudos + reputazione (replica adattiva).
 - `internal/backend/` — backend d'inferenza (`llama-server`, stub).
 - `internal/control/` — control API loopback per la CLI.
