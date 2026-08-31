@@ -1,3 +1,5 @@
-# compiled launcher binaries (built locally by swarm.sh / swarm.ps1 / go build)
+# local Linux/macOS dev binary built by swarm.sh / go build
 /swarmai
-/swarmai.exe
+# NOTE: swarmai.exe (Windows) is committed on purpose so the second PC needs
+# no toolchain — just double-click. Rebuild anytime with:
+#   GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -o swarmai.exe .
