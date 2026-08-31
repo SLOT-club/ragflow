@@ -152,13 +152,22 @@ func (n *Node) FetchModel(ctx context.Context, seeder peer.ID, manifestID, outPa
 		return nil, err
 	}
 
+	// Chunks are content-defined (variable size), so precompute each chunk's
+	// byte offset from the running total before fetching them concurrently.
+	offsets := make([]int64, len(m.Chunks))
+	var acc int64
+	for i, ch := range m.Chunks {
+		offsets[i] = acc
+		acc += int64(ch.Size)
+	}
+
 	sem := make(chan struct{}, window)
 	errCh := make(chan error, len(m.Chunks))
 	var wg sync.WaitGroup
-	for i, h := range m.Chunks {
+	for i, ch := range m.Chunks {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(idx int, hash string) {
+		go func(idx int, hash string, off int64) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			b, err := n.fetchChunk(ctx, seeder, hash)
@@ -166,13 +175,12 @@ func (n *Node) FetchModel(ctx context.Context, seeder peer.ID, manifestID, outPa
 				errCh <- fmt.Errorf("chunk %d: %w", idx, err)
 				return
 			}
-			off := int64(idx) * int64(m.ChunkSize)
 			if _, err := out.WriteAt(b, off); err != nil {
 				errCh <- err
 				return
 			}
 			n.blobs.RegisterChunk(hash, outPath, off, len(b))
-		}(i, h)
+		}(i, ch.Hash, offsets[i])
 	}
 	wg.Wait()
 	close(errCh)

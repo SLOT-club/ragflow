@@ -20,10 +20,13 @@ Modulo Go autonomo (non tocca la build nativa di RAGFlow). Costruito su [libp2p]
   `max_tokens`, niente ruolo `developer`, `enable_thinking:false`); i nodi senza modello usano lo stub e
   restano utili come router/relay.
 - **Streaming dei pesi (Stremio-style)**: protocollo `/swarmai/blob/1.0.0`. Un modello è spezzato in
-  chunk content-addressed (SHA-256) descritti da un manifest anch'esso content-addressed. Un nodo
-  annuncia i modelli che seeda nella capability card; un altro li **streama a pezzi dai peer** con
-  finestra di prefetch, **verifica ogni chunk**, riassembla il file e a sua volta ridiventa seeder.
-  Verificato: fetch byte-identico di un modello via P2P.
+  chunk **content-defined (GearHash/FastCDC)** — i confini dipendono dal contenuto, non da offset fissi —
+  ciascuno content-addressed (SHA-256), descritti da un manifest anch'esso content-addressed. Un nodo
+  annuncia i modelli che seeda; un altro li **streama a pezzi dai peer** con finestra di prefetch,
+  **verifica ogni chunk**, riassembla il file e ridiventa seeder. Il CDC dà la **dedup fra versioni**:
+  inserire o cambiare pochi byte reshapa solo i chunk locali, il resto resta identico e condivisibile.
+  Verificato: fetch byte-identico via P2P; e dopo un'inserzione di byte il CDC mantiene il 99% dei chunk
+  condivisi contro il 2% della taglia fissa.
 - **Cellula LAN via llama.cpp RPC** (`internal/cell`, protocollo `/swarmai/rpc/1.0.0`). Più nodi fanno
   girare insieme un modello che non sta su una macchina sola. Punto critico di **sicurezza**: la porta
   di `rpc-server` non ha autenticazione e ha avuto una RCE (CVE-2026-34159), quindi swarmai **non la
@@ -101,9 +104,10 @@ curl "http://127.0.0.1:4780/run?prompt=ciao"   # A (senza modello) -> servito da
 ```
 
 ## Prossimi milestone (dal piano e dalla ricerca in `research/swarm-ai-tech-integration.md`)
-1. **Fetch on-demand per esperto** (non a file intero): chunking content-defined (GearHash) per dedup
-   fra quantizzazioni, e richiesta dei soli esperti/layer attivi con prefetch predittivo. Basi già qui
-   (`internal/blob`, `/swarmai/blob/1.0.0`).
+1. **Fetch on-demand per esperto** (non a file intero): richiesta dei soli esperti/layer attivi (per
+   intervallo o per sotto-manifest) con prefetch predittivo guidato dal router MoE. Il chunking
+   content-defined (GearHash) per la dedup fra versioni è **già fatto** (`internal/blob`); manca il
+   mapping esperto→chunk e la richiesta selettiva.
 2. **Riabilitare QUIC** aggiornando go-libp2p/quic-go (oggi TCP-only per aggirare un panic di quic-go
    sotto Go 1.26); poi PSK/pnet per la cella di amici e TOPLOC per lo swarm pubblico.
 3. **Sandbox** dei task non fidati (seccomp/Landlock attorno all'inferenza, wasmtime per il codice di
