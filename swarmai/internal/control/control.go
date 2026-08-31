@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/slot-club/swarmai/internal/backend"
@@ -29,6 +30,7 @@ func NewServer(n *node.Node, addr string) *Server {
 	mux.HandleFunc("/share", s.handleShare)
 	mux.HandleFunc("/fetch", s.handleFetch)
 	mux.HandleFunc("/models", s.handleModels)
+	mux.HandleFunc("/cell/prepare", s.handleCellPrepare)
 	s.http = &http.Server{Addr: addr, Handler: mux}
 	return s
 }
@@ -120,6 +122,26 @@ func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"local":  s.node.LocalSeeds(),
 		"remote": remote,
+	})
+}
+
+// handleCellPrepare sets up secure tunnels to worker peers and returns the
+// llama.cpp flags to run a coordinator over the cell.
+func (s *Server) handleCellPrepare(w http.ResponseWriter, r *http.Request) {
+	workers := r.URL.Query().Get("workers")
+	if workers == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing workers (comma-separated peer ids)"})
+		return
+	}
+	rpcArg, split, err := s.node.PrepareCell(strings.Split(workers, ","))
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"rpc":          rpcArg,
+		"tensor_split": split,
+		"launch_hint":  "llama-server -m <model.gguf> --rpc " + rpcArg + " --tensor-split " + split,
 	})
 }
 

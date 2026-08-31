@@ -24,6 +24,12 @@ Modulo Go autonomo (non tocca la build nativa di RAGFlow). Costruito su [libp2p]
   annuncia i modelli che seeda nella capability card; un altro li **streama a pezzi dai peer** con
   finestra di prefetch, **verifica ogni chunk**, riassembla il file e a sua volta ridiventa seeder.
   Verificato: fetch byte-identico di un modello via P2P.
+- **Cellula LAN via llama.cpp RPC** (`internal/cell`, protocollo `/swarmai/rpc/1.0.0`). Più nodi fanno
+  girare insieme un modello che non sta su una macchina sola. Punto critico di **sicurezza**: la porta
+  di `rpc-server` non ha autenticazione e ha avuto una RCE (CVE-2026-34159), quindi swarmai **non la
+  espone mai**: il worker lega `rpc-server` a loopback e il coordinatore ci arriva **dentro lo stream
+  libp2p autenticato**, con `--tensor-split` calcolato dalla RAM libera dei membri. Verificato: byte
+  instradati coordinatore→libp2p→worker e ritorno.
 
 ## Build
 ```bash
@@ -56,6 +62,17 @@ swarmai model share ./qwen3.5-4b-q6_k.gguf   # su un nodo: chunk + seed, stampa 
 swarmai model list                            # vedere chi seeda cosa
 swarmai model fetch <manifest-id> -o ./m.gguf # su un altro nodo: streama a pezzi dai peer, verifica
 ```
+
+Formare una cellula LAN (un modello su più macchine):
+```bash
+# su ogni macchina worker (rpc-server legato a loopback, mai esposto):
+swarmai node start --rpc-worker --rpc-bin /path/to/rpc-server --rpc-port 50052
+# sul coordinatore: apre i tunnel sicuri e stampa i flag di llama.cpp
+swarmai cell prepare --workers <peerid-worker1>,<peerid-worker2>
+#   -> { "rpc": "127.0.0.1:PA,127.0.0.1:PB", "tensor_split": "0.5,0.3,0.2",
+#        "launch_hint": "llama-server -m <model> --rpc ... --tensor-split ..." }
+# poi lancia llama-server col launch_hint: il traffico RPC scorre dentro libp2p.
+```
 `peers`/`status`/`run` parlano con la control API locale del demone (`127.0.0.1:<porta+1>`).
 
 ## Prova a due nodi in locale
@@ -71,18 +88,18 @@ curl "http://127.0.0.1:4780/run?prompt=ciao"   # A (senza modello) -> servito da
 1. **Fetch on-demand per esperto** (non a file intero): chunking content-defined (GearHash) per dedup
    fra quantizzazioni, e richiesta dei soli esperti/layer attivi con prefetch predittivo. Basi già qui
    (`internal/blob`, `/swarmai/blob/1.0.0`).
-2. **Cellula LAN via llama.cpp RPC** (`rpc-server`/`--rpc`): swarmai fa da control plane (scoperta,
-   `--tensor-split` dalle capability, membership per RTT) e **tunnela l'RPC nello stream libp2p
-   autenticato** — mai la porta TCP grezza (CVE-2026-34159, zero-auth).
-3. **Draft→verify (M2)**: il nodo povero manda la bozza locale, un super-nodo la verifica in batch.
-4. **Fiducia stadiata**: PeerID Noise + PSK per la cellula di amici; poi esecuzione ridondante N-di-3 +
+2. **Draft→verify (M2)**: il nodo povero manda la bozza locale, un super-nodo la verifica in batch.
+3. **Fiducia stadiata**: PeerID Noise + PSK per la cellula di amici; poi esecuzione ridondante N-di-3 +
    replica adattiva (BOINC), kudos (AI-Horde), TOPLOC per lo swarm pubblico; sandbox seccomp/wasmtime.
-5. **Nodo browser via WebRTC (M12)**.
+4. **Nodo browser via WebRTC (M12)**.
+
+(La cellula LAN via llama.cpp RPC col tunnel sicuro è **già implementata** — vedi sopra.)
 
 ## Architettura (file)
 - `main.go` — CLI (`node start`, `peers`, `status`, `run`, `model share|fetch|list`).
 - `internal/node/` — host libp2p, scoperta, gossip delle capacità, registro dei peer, protocollo infer
   (`infer.go`) e protocollo di streaming dei pesi (`stream.go`).
 - `internal/blob/` — chunking content-addressed e chunk store locale.
+- `internal/cell/` — cellula LAN via llama.cpp RPC + tunnel sicuro loopback↔libp2p.
 - `internal/backend/` — backend d'inferenza (`llama-server`, stub).
 - `internal/control/` — control API loopback per la CLI.

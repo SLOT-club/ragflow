@@ -47,6 +47,8 @@ func main() {
 		cmdRun(os.Args[2:])
 	case "model":
 		cmdModel(os.Args[2:])
+	case "cell":
+		cmdCell(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -67,9 +69,30 @@ Commands:
   model share PATH  chunk + seed a model file, print its manifest id
   model fetch ID    stream a model from a seeding peer (-o OUT)
   model list        show models seeded locally and by peers
+  cell prepare      set up a LAN cell (llama.cpp RPC) over worker peers
 
 Run "swarmai node start -h" for node flags.
 `)
+}
+
+// cmdCell prepares a LAN cell: it asks the local daemon to open secure tunnels
+// to worker peers and prints the llama.cpp flags to launch a coordinator.
+func cmdCell(args []string) {
+	if len(args) == 0 || args[0] != "prepare" {
+		fmt.Fprintln(os.Stderr, "usage: swarmai cell prepare --workers <peer1,peer2> [--port P]")
+		os.Exit(2)
+	}
+	fs := flag.NewFlagSet("cell prepare", flag.ExitOnError)
+	port := fs.Int("port", 4779, "node port whose control api to use")
+	workers := fs.String("workers", "", "comma-separated worker peer ids")
+	_ = fs.Parse(args[1:])
+	if *workers == "" {
+		fmt.Fprintln(os.Stderr, "usage: swarmai cell prepare --workers <peer1,peer2>")
+		os.Exit(2)
+	}
+	u := fmt.Sprintf("http://%s/cell/prepare?workers=%s",
+		control.DefaultControlAddr(*port), url.QueryEscape(*workers))
+	fmt.Println(prettyJSON(get(u)))
 }
 
 func cmdModel(args []string) {
@@ -127,6 +150,9 @@ func cmdNode(args []string) {
 	model := fs.String("model", os.Getenv("SWARMAI_MODEL"), "name of the served model, advertised to peers")
 	schedule := fs.String("schedule", "always", "contribution schedule: idle|night|always|manual")
 	identity := fs.String("identity", "", "path to persistent identity key (default ~/.swarmai/identity.key)")
+	rpcWorker := fs.Bool("rpc-worker", false, "act as a llama.cpp RPC worker for LAN cells")
+	rpcBin := fs.String("rpc-bin", "", "path to llama.cpp rpc-server binary (optional)")
+	rpcPort := fs.Int("rpc-port", 50052, "loopback port for the RPC worker")
 	var bootstrap multiFlag
 	fs.Var(&bootstrap, "bootstrap", "extra bootstrap peer multiaddr (repeatable)")
 	_ = fs.Parse(args[1:])
@@ -146,6 +172,9 @@ func cmdNode(args []string) {
 		Backend:      be,
 		Bootstrap:    bootstrap,
 		Schedule:     *schedule,
+		RPCWorker:    *rpcWorker,
+		RPCServerBin: *rpcBin,
+		RPCPort:      *rpcPort,
 	})
 	if err != nil {
 		log.Fatalf("start node: %v", err)

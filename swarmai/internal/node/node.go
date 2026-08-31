@@ -11,10 +11,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/slot-club/swarmai/internal/backend"
 	"github.com/slot-club/swarmai/internal/blob"
+	"github.com/slot-club/swarmai/internal/cell"
 
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -42,6 +44,11 @@ type Config struct {
 	Backend      backend.Backend
 	Bootstrap    []string // extra bootstrap multiaddrs (WAN); DHT defaults added too
 	Schedule     string   // idle|night|always|manual
+
+	// RPCWorker turns this node into a llama.cpp RPC worker for LAN cells.
+	RPCWorker    bool
+	RPCServerBin string // path to llama.cpp rpc-server (optional)
+	RPCPort      int    // loopback port for rpc-server (default 50052)
 }
 
 // Node is a running swarmai peer.
@@ -55,6 +62,9 @@ type Node struct {
 	backend  backend.Backend
 	name     string
 	schedule string
+
+	mu    sync.Mutex
+	coord *cell.Coordinator
 }
 
 // New builds and starts a node: host, discovery, gossip, and the infer handler.
@@ -114,7 +124,50 @@ func New(ctx context.Context, cfg Config) (*Node, error) {
 	n.startDiscoveryAdvertise(ctx)
 	n.startCapabilityLoops(ctx)
 
+	if cfg.RPCWorker {
+		port := cfg.RPCPort
+		if port == 0 {
+			port = 50052
+		}
+		if _, err := cell.StartRPCServer(ctx, cfg.RPCServerBin, port); err != nil {
+			log.Printf("rpc-server not started: %v (tunnel still targets 127.0.0.1:%d)", err, port)
+		}
+		cell.RegisterWorker(h, fmt.Sprintf("127.0.0.1:%d", port))
+		log.Printf("rpc worker active: /swarmai/rpc tunnels to loopback 127.0.0.1:%d", port)
+	}
+
 	return n, nil
+}
+
+// PrepareCell sets up secure loopback→libp2p tunnels to the given worker peers
+// and returns the llama.cpp flags to launch a coordinator over the cell: the
+// --rpc value (loopback tunnel addresses) and a --tensor-split weighted by each
+// member's free RAM. The tunnels stay open until the next PrepareCell or Close.
+func (n *Node) PrepareCell(workerIDs []string) (rpcArg, tensorSplit string, err error) {
+	if len(workerIDs) == 0 {
+		return "", "", fmt.Errorf("no worker peers given")
+	}
+	snap := n.reg.Snapshot()
+	workers := make([]cell.Worker, 0, len(workerIDs))
+	for _, wid := range workerIDs {
+		pid, derr := peer.Decode(wid)
+		if derr != nil {
+			return "", "", fmt.Errorf("bad worker id %q: %w", wid, derr)
+		}
+		card := snap[pid]
+		workers = append(workers, cell.Worker{Peer: pid, Name: card.Name, RAMFreeMB: card.RAMFreeMB})
+	}
+	coord := cell.NewCoordinator(n.Host, workers)
+	if err := coord.Setup(); err != nil {
+		return "", "", err
+	}
+	n.mu.Lock()
+	if n.coord != nil {
+		n.coord.Close()
+	}
+	n.coord = coord
+	n.mu.Unlock()
+	return coord.RPCArg(), coord.TensorSplit(detectHost().RAMFreeMB), nil
 }
 
 // setupDHT starts a Kademlia DHT in server mode and bootstraps it.
@@ -338,6 +391,11 @@ func (n *Node) Addrs() []string {
 
 // Close shuts the node down.
 func (n *Node) Close() error {
+	n.mu.Lock()
+	if n.coord != nil {
+		n.coord.Close()
+	}
+	n.mu.Unlock()
 	if n.dht != nil {
 		_ = n.dht.Close()
 	}
