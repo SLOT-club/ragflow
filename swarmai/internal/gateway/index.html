@@ -55,7 +55,17 @@
     <div class="peers" id="peers"></div>
   </div>
 
-  <footer>Nodo consumatore a installazione zero. Contribuire con calcolo dal browser (WebGPU) è il passo successivo.</footer>
+  <div class="panel">
+    <div class="row" style="align-items:center">
+      <div style="flex:1">
+        <b>Contribuisci con il tuo browser</b>
+        <div class="muted" id="wstat">Fai girare un piccolo modello in WebGPU e servi lo swarm.</div>
+      </div>
+      <button id="contribute">Attiva WebGPU</button>
+    </div>
+  </div>
+
+  <footer>Apri questa pagina da qualsiasi dispositivo sulla rete: usi lo swarm senza installare nulla, e col pulsante qui sopra puoi anche contribuire calcolo dal browser.</footer>
 </div>
 
 <script>
@@ -101,6 +111,34 @@ function escapeHtml(s){ return s.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','
 
 $('#ask').addEventListener('click', ask);
 $('#q').addEventListener('keydown', e=>{ if(e.key==='Enter' && (e.metaKey||e.ctrlKey)) ask(); });
+
+// --- Contribute: run a small model in WebGPU (web-llm) and serve the swarm ---
+let engine=null, ws=null;
+async function contribute(){
+  const btn=$('#contribute'), stat=$('#wstat');
+  if(!navigator.gpu){ stat.innerHTML='<span class="err">WebGPU non disponibile in questo browser</span>'; return; }
+  btn.disabled=true; stat.textContent='Carico il modello (la prima volta scarica i pesi)…';
+  try{
+    const webllm = await import('https://esm.run/@mlc-ai/web-llm');
+    const modelId='Qwen2.5-0.5B-Instruct-q4f16_1-MLC';   // piccolo, gira su molti dispositivi
+    engine = await webllm.CreateMLCEngine(modelId, { initProgressCallback:(p)=>{ stat.textContent='Carico: '+((p&&p.text)||''); } });
+    const proto = location.protocol==='https:'?'wss':'ws';
+    ws = new WebSocket(proto+'://'+location.host+'/ws/worker');
+    ws.onopen = ()=>{ ws.send(JSON.stringify({type:'register', model:modelId})); stat.innerHTML='<span class="dot"></span>Stai contribuendo allo swarm ('+modelId+')'; };
+    ws.onclose = ()=>{ stat.textContent='Disconnesso dallo swarm.'; btn.disabled=false; };
+    ws.onerror = ()=>{ stat.innerHTML='<span class="err">Errore WebSocket</span>'; };
+    ws.onmessage = async (ev)=>{
+      let m; try{ m=JSON.parse(ev.data); }catch(_){ return; }
+      if(m.type!=='infer') return;
+      try{
+        const r = await engine.chat.completions.create({ messages:[{role:'user',content:m.prompt}], max_tokens:m.max_tokens||256 });
+        ws.send(JSON.stringify({type:'result', id:m.id, text:r.choices[0].message.content}));
+      }catch(e){ ws.send(JSON.stringify({type:'result', id:m.id, error:String(e)})); }
+    };
+  }catch(e){ stat.innerHTML='<span class="err">Errore: '+escapeHtml(String(e))+'</span>'; btn.disabled=false; }
+}
+$('#contribute').addEventListener('click', contribute);
+
 refreshStatus(); setInterval(refreshStatus, 4000);
 </script>
 </body>

@@ -65,11 +65,14 @@ Modulo Go autonomo (non tocca la build nativa di RAGFlow). Costruito su [libp2p]
   L'accordo corto-circuita, quindi il caso comune costa poco. Verificato: percorso "verified" (accordo)
   e "adjudicated" (disaccordo → arbitro).
 - **Nodo browser / gateway** (`internal/gateway`): con `--gateway :8090` un nodo serve una **pagina web
-  autonoma** (zero installazione, nessuna dipendenza esterna, theme-aware). Da qualsiasi telefono o
-  browser sulla rete apri la pagina e **usi lo swarm**: fai domande (instradate e verificate fra modelli
-  con l'ensemble) e vedi i peer connessi in tempo reale. È il percorso a installazione zero per
-  *consumare* lo swarm; il browser come *peer contribuente* (js-libp2p + WebGPU) è il passo successivo.
-  Verificato: pagina + API, e una domanda dal browser instradata a un nodo-modello dello swarm.
+  autonoma** (zero installazione, theme-aware). Da qualsiasi telefono o browser sulla rete apri la pagina
+  e **usi lo swarm** (domande instradate e verificate fra modelli, peer connessi in tempo reale) — e,
+  col pulsante **"Attiva WebGPU"**, **contribuisci**: il browser fa girare un piccolo modello via
+  **web-llm/WebGPU** e si registra come **worker**; il gateway lo espone allo swarm come proprio modello
+  e gli inoltra le richieste su WebSocket. Il browser è così un *peer contribuente* (bridged dal
+  gateway). Verificato: pagina + API + inferenza instradata a un nodo-modello; e il protocollo worker
+  end-to-end (browser che registra un modello WebGPU e serve una richiesta dello swarm, con un finto
+  browser in Go).
 
 ## Build e test
 ```bash
@@ -207,9 +210,9 @@ swarmai node start --join <TOKEN>   # NAT ok: prenota un circuito sul relay dell
 1. **Integrare il prefetch col router MoE reale**: agganciare `Prefetch` alle attivazioni degli esperti
    di `llama-server` (o del backend) così gli esperti del prossimo token si streamano prima di servire.
    Il layout GGUF che dice *dove* sta ogni esperto è **già fatto** (`internal/gguf`).
-2. **Browser come peer contribuente**: js-libp2p sul trasporto WebSocket/WebRTC del nodo (per essere un
-   vero peer P2P, non solo client del gateway) + **WebGPU** (web-llm) per far girare un piccolo modello
-   nel browser e restituirlo allo swarm. Il gateway (`internal/gateway`) è l'ingresso su cui costruirlo.
+2. **Browser come peer P2P *diretto*** (opzionale): oggi il browser contribuisce *tramite il gateway*
+   (bridge) con WebGPU; il passo ulteriore è un vero peer js-libp2p sul trasporto WebSocket/WebRTC del
+   nodo, senza bridge — utile per decentralizzare anche l'ingresso.
 3. **Sandbox** dei task non fidati (seccomp/Landlock attorno all'inferenza, wasmtime per il codice di
    orchestrazione) e **costo d'identità** anti-Sybil per lo swarm aperto.
 4. **Nodo browser via WebRTC (M12)**.
@@ -228,7 +231,8 @@ esperto con cache LRU e layout GGUF automatico sono **già implementati e verifi
 - `internal/verify/` — pattern draft→verify (M2): prompt di verifica e interpretazione del verdetto.
 - `internal/route/` — classificatore difficoltà/dominio e ordinamento per tier.
 - `internal/node/ensemble.go` — orchestrazione combo: routing + controllo incrociato + arbitro.
-- `internal/gateway/` — nodo browser: pagina web autonoma + API, servita da un nodo (`--gateway`).
+- `internal/gateway/` — nodo browser: pagina web (consuma + contribuisce via WebGPU), API, worker WS.
+- `internal/backend/swappable.go` — backend commutabile a runtime (per iniettare il modello del browser).
 - `internal/trust/` — ledger kudos + reputazione (replica adattiva).
 - `internal/backend/` — backend d'inferenza (`llama-server`, stub).
 - `internal/control/` — control API loopback per la CLI.

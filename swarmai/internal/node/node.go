@@ -66,19 +66,20 @@ type Config struct {
 
 // Node is a running swarmai peer.
 type Node struct {
-	Host     host.Host
-	dht      *dht.IpfsDHT
-	ps       *pubsub.PubSub
-	topic    *pubsub.Topic
-	reg      *Registry
-	blobs    *blob.Store
-	experts  *blob.Cache
-	credits  *trust.Ledger
-	backend  backend.Backend
-	name     string
-	schedule string
-	tier     string
-	tags     []string
+	Host      host.Host
+	dht       *dht.IpfsDHT
+	ps        *pubsub.PubSub
+	topic     *pubsub.Topic
+	reg       *Registry
+	blobs     *blob.Store
+	experts   *blob.Cache
+	credits   *trust.Ledger
+	backend   backend.Backend
+	swappable *backend.Swappable
+	name      string
+	schedule  string
+	tier      string
+	tags      []string
 
 	announceKick chan struct{}
 
@@ -138,22 +139,24 @@ func New(ctx context.Context, cfg Config) (*Node, error) {
 	if be == nil {
 		be = backend.Stub{}
 	}
+	sw := backend.NewSwappable(be)
 	sched := cfg.Schedule
 	if sched == "" {
 		sched = "always"
 	}
 
 	n := &Node{
-		Host:     h,
-		reg:      NewRegistry(90 * time.Second),
-		blobs:    blob.NewStore(),
-		experts:  blob.NewCache(0),
-		credits:  trust.NewLedger(),
-		backend:  be,
-		name:     cfg.Name,
-		schedule: sched,
-		tier:     cfg.Tier,
-		tags:     cfg.Tags,
+		Host:      h,
+		reg:       NewRegistry(90 * time.Second),
+		blobs:     blob.NewStore(),
+		experts:   blob.NewCache(0),
+		credits:   trust.NewLedger(),
+		backend:   sw,
+		swappable: sw,
+		name:      cfg.Name,
+		schedule:  sched,
+		tier:      cfg.Tier,
+		tags:      cfg.Tags,
 	}
 
 	h.SetStreamHandler(InferProtocol, n.handleInferStream)
@@ -435,6 +438,20 @@ func (n *Node) Credits() []trust.Rep { return n.credits.Snapshot() }
 // AnnounceNow publishes this node's capability card immediately, instead of
 // waiting for the periodic tick. Useful right after connecting to a peer.
 func (n *Node) AnnounceNow() { n.publishCard(context.Background()) }
+
+// SwapBackend makes an external backend (e.g. a browser worker running a model
+// in WebGPU) become this node's model, and re-announces so the swarm sees it.
+func (n *Node) SwapBackend(b backend.Backend) {
+	n.swappable.Set(b)
+	n.AnnounceNow()
+}
+
+// RestoreBackend reverts to the node's base backend (e.g. when the browser
+// worker disconnects) and re-announces.
+func (n *Node) RestoreBackend() {
+	n.swappable.Restore()
+	n.AnnounceNow()
+}
 
 // SelfCard returns this node's current capability card.
 func (n *Node) SelfCard() CapabilityCard {

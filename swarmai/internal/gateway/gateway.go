@@ -41,6 +41,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/ask", s.handleAsk)
+	mux.HandleFunc("/ws/worker", s.handleWorker)
 	return mux
 }
 
