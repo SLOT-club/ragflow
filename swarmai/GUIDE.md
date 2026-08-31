@@ -94,6 +94,8 @@ Nel repo ci sono due launcher identici che capiscono **da soli** il ruolo del PC
 ./swarm.sh <TOKEN>
 ```
 
+Su Windows senza toccare il terminale c'è **`swarm.bat`**: doppio-clic e parte (chiama `swarm.ps1`). Per avere l'icona sul desktop, doppio-clic **una volta** su `metti-sul-desktop.bat`: crea un collegamento "Swarm AI" sul desktop che punta a `swarm.bat` nella cartella del repo.
+
 Il launcher compila il binario al primo avvio (serve Go, oppure si copia il file `swarmai`/`swarmai.exe` già compilato da un PC gemello con lo stesso OS). Rileva il modello sondando gli endpoint OpenAI comuni (`127.0.0.1:8080/8081/1234/11434`, o `$SWARMAI_LLAMA_URL`).
 
 **Per SOLO usare lo swarm** da un altro PC o da un telefono non serve nemmeno il launcher: apri il browser su `http://<IP-DELL-HOST>:8090`. Nessuna installazione.
