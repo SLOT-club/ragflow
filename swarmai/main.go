@@ -14,6 +14,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -38,6 +39,11 @@ import (
 )
 
 func main() {
+	// Windows spams "mdns: Failed to set multicast interface" (a harmless
+	// discovery warning) many times a second; drop just that line so the window
+	// stays readable, keeping every other log.
+	log.SetOutput(quietMulticastWarnings{os.Stderr})
+
 	if len(os.Args) < 2 {
 		// Double-click with no subcommand: just do the sensible thing.
 		autoStart()
@@ -452,6 +458,18 @@ func prettyJSON(b []byte) string {
 	}
 	out, _ := json.MarshalIndent(v, "", "  ")
 	return string(out)
+}
+
+// quietMulticastWarnings drops the noisy, harmless zeroconf line
+// "mdns: Failed to set multicast interface" (common on Windows) and passes
+// everything else straight through.
+type quietMulticastWarnings struct{ w io.Writer }
+
+func (q quietMulticastWarnings) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte("Failed to set multicast interface")) {
+		return len(p), nil
+	}
+	return q.w.Write(p)
 }
 
 // pauseIfConsole keeps a double-clicked console window open (Windows especially)
