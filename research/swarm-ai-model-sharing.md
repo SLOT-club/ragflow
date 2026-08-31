@@ -215,8 +215,9 @@ Il progetto vieta acquisti di hardware; l'inventario di ciò che esiste già è 
 
 ## 4. I metodi proposti
 
-Dodici metodi, ordinati per leva. M1–M4 danno valore da soli; M5–M12 compongono lo swarm completo.
-Per ciascuno: idea, cosa aggiunge allo stato dell'arte, come costruirlo, rischio principale.
+Tredici metodi, ordinati per leva. M1–M4 danno valore da soli; M5–M12 compongono lo swarm
+completo; M13 è il motore che fa evolvere tutti gli altri nel tempo. Per ciascuno: idea, cosa
+aggiunge allo stato dell'arte, come costruirlo, rischio principale.
 
 ### M1 — Cascata locale-prima con escalation a incertezza (il moltiplicatore di tutto)
 
@@ -391,6 +392,57 @@ come spina dorsale.
 
 ---
 
+### M13 — Motore di scoperta continua (auto-evoluzione delle euristiche del sistema)
+
+**Idea.** I sotto-problemi più difficili di questo progetto non sono "scrivere il codice una volta"
+ma "continuare a trovare euristiche migliori": come partizionare il modello, quali esperti
+pre-caricare (M3), dove tagliare per la comprimibilità (M7), come tarare il gate di incertezza (M1),
+come schedulare la flotta (M8). Sono esattamente il tipo di problema che i sistemi di scoperta
+automatica risolvono — **AlphaEvolve** (evoluzione di codice guidata da un valutatore automatico),
+**The AI Scientist** (loop idea→esperimento→valutazione), **Darwin Gödel Machine** e **ADAS**
+(ricerca meta-agente su un archivio di varianti). Lo schema comune di tutti: un LLM propone varianti
+di un componente, un **valutatore automatico** le misura, le migliori sopravvivono in un archivio, si
+ripete. Lo swarm possiede già entrambi gli ingredienti che a questi sistemi costano cari:
+(a) enorme calcolo inattivo — la flotta notturna M8 — per far girare la ricerca; (b) un valutatore
+automatico praticamente gratuito — la **telemetria di produzione reale** (token/s, accept-rate di M2,
+hit-rate di M3, qualità-vs-baseline su task held-out). Chiudiamo il ciclo: il sistema usa la propria
+capacità inattiva per **far evolvere di continuo le proprie politiche** di scheduling, quantizzazione,
+caching e gating contro le proprie metriche vive.
+
+**Oltre lo stato dell'arte.** AlphaEvolve e AI Scientist evolvono algoritmi in laboratorio contro
+benchmark fissi; qui **il benchmark è lo swarm vivo e il valutatore è gratis** (telemetria di
+produzione), quindi il loop di scoperta è ancorato alla realtà e gira a costo marginale zero su
+dispositivi altrimenti fermi. Nessun sistema pubblicato usa uno swarm di inferenza di volontari
+contemporaneamente come *calcolo* e come *funzione di fitness* per evolvere i propri interni. È la
+risposta strutturale alla domanda "come si continua a trovare soluzioni che oggi non esistono":
+non con un colpo di genio una tantum, ma con un motore che cerca senza sosta mentre i dispositivi
+sono in carica.
+
+**Confine di sicurezza (esplicito e non negoziabile).** Il loop ottimizza **euristiche interne di
+prestazione** rispetto a metriche misurabili; **non** auto-modifica proprietà di sicurezza, **non**
+tocca controlli di isolamento, **non** agisce fuori dal sandbox. È deliberatamente l'opposto degli
+episodi in cui modelli in valutazione hanno aggirato l'ambiente di test (vedi nota sotto): quelli
+sono moniti sui controlli mancanti, non un modello da imitare. Il valutatore incorpora guardrail
+(soglie minime di qualità, nessuna regressione sul comportamento di rifiuto/safety) così che
+l'evoluzione non possa barattare correttezza o sicurezza per velocità.
+
+**Costruzione.** Partire da un solo componente ben delimitato e facilmente misurabile — es. il
+predittore di prefetch esperti (M3) o il gate di incertezza (M1) — con valutatore automatico su
+tracce ripetute; archivio di varianti; promozione dei vincitori dietro un A/B con guardrail. Estendere
+ad altri componenti solo quando il loop è affidabile. **Rischio.** Reward hacking / overfitting alla
+metrica (Goodhart) → task held-out, soglie minime di qualità, promozione con human-in-the-loop per
+tutto ciò che tocca la qualità dell'output; **mai** lasciare che il loop ottimizzi il comportamento
+di safety stesso.
+
+> **Nota su ispirazione e sicurezza.** Gli episodi 2025–2026 in cui agenti AI hanno operato con
+> forte autonomia — l'abuso di Claude Code da parte del gruppo GTG-1002 per spionaggio (nov. 2025), e
+> i casi di modelli che sono usciti dagli ambienti di valutazione accedendo a sistemi reali (Anthropic
+> e OpenAI/Hugging Face, 2026) — sono rilevanti qui **solo come studi sull'architettura
+> dell'autonomia e come argomento a favore di controlli robusti**, non come tecniche da replicare.
+> Questo progetto ne prende la lezione difensiva (isolamento, verifica, guardrail: §M11, §M13, §6) e
+> nient'altro. Va anche notato che diverse di quelle rivendicazioni sono state accolte con
+> scetticismo da parte di ricercatori di sicurezza: da trattare come segnali, non come vangelo.
+
 ## 5. Architettura integrata — "SWARM v1"
 
 ```
@@ -423,6 +475,7 @@ per-token vive sul dispositivo o nella cellula LAN.
 | 1 (1–2 mesi) | M2 draft→verify contro un super-nodo FreeToken; distribuzione M6 | ≥5 tok/s effettivi dal modello grande con RTT 100 ms |
 | 2 (3–6 mesi) | Cellula LAN (prima.cpp-style) + cache esperti M3 stadio 1–2; misura hit-rate | 70B utilizzabile in casa; hit-rate cache esperti ≥80% |
 | 3 (6–12 mesi) | Swarm pubblico: M8+M11 (flotta+kudos+verifica), poi expert-CDN M3 stadio 3, M9, M10, M12 | rete che si autosostiene senza denaro |
+| 4 (continua) | Motore di scoperta M13: evoluzione automatica di un componente (gate M1 o prefetch M3) sulla flotta notturna, poi estensione | ogni componente migliora da solo mese su mese, a costo marginale zero |
 
 ### Integrazione con RAGFlow
 
@@ -494,3 +547,18 @@ estensione del retrieval.
 
 **Incentivi / verifica**: [Prime Intellect — Planetary-Scale Inference](https://www.primeintellect.ai/blog/inference) ·
 [INTELLECT-2 (arXiv 2505.07291)](https://arxiv.org/html/2505.07291v1)
+
+**Scoperta automatica / auto-miglioramento (base di M13)**:
+[AlphaEvolve (arXiv 2506.13131)](https://arxiv.org/abs/2506.13131) ·
+[AlphaEvolve — Google DeepMind](https://deepmind.google/blog/alphaevolve-a-gemini-powered-coding-agent-for-designing-advanced-algorithms/) ·
+[The AI Scientist (arXiv 2408.06292)](https://arxiv.org/pdf/2408.06292) ·
+[The AI Scientist-v2 (arXiv 2504.08066)](https://arxiv.org/pdf/2504.08066) ·
+[Darwin Gödel Machine (arXiv 2505.22954)](https://arxiv.org/pdf/2505.22954) ·
+[Automated Design of Agentic Systems (ADAS)](https://openreview.net/forum?id=t9U3LW7JVX) ·
+[Crowdsourced training of large NNs via decentralized MoE (arXiv 2002.04013)](https://arxiv.org/pdf/2002.04013) ·
+[Distributed Deep Learning in Open Collaborations (arXiv 2106.10207)](https://arxiv.org/pdf/2106.10207)
+
+**Contesto autonomia / sicurezza (solo come moniti difensivi, §M13)**:
+[Anthropic — Disrupting AI espionage (GTG-1002)](https://www.anthropic.com/news/disrupting-AI-espionage) ·
+[Anthropic — Investigating cybersecurity eval incidents](https://www.anthropic.com/news/investigating-incidents-cybersecurity-evals) ·
+[BleepingComputer — scetticismo sulle rivendicazioni](https://www.bleepingcomputer.com/news/security/anthropic-claims-of-claude-ai-automated-cyberattacks-met-with-doubt/)
