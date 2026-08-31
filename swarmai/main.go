@@ -45,6 +45,10 @@ func main() {
 		cmdQuery("status", os.Args[2:])
 	case "run":
 		cmdRun(os.Args[2:])
+	case "draft":
+		cmdDraft(os.Args[2:])
+	case "credits":
+		cmdQuery("credits", os.Args[2:])
 	case "model":
 		cmdModel(os.Args[2:])
 	case "cell":
@@ -65,7 +69,9 @@ Commands:
   node start        start a node daemon (discovery + gossip + inference)
   peers             list capability cards of discovered peers
   status            show this node's own card and addresses
-  run "text"        answer a prompt using the best compute in the swarm
+  run "text"        answer a prompt (add --redundancy N for majority verification)
+  draft "text"      draft locally, verify/correct on a stronger peer (M2)
+  credits           show the local reputation ledger (kudos + agreement)
   model share PATH  chunk + seed a model file, print its manifest id
   model fetch ID    stream a model from a seeding peer (-o OUT)
   model list        show models seeded locally and by peers
@@ -214,15 +220,32 @@ func cmdRun(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	port := fs.Int("port", 4779, "node port whose control api to query")
 	model := fs.String("model", "", "requested model")
+	redundancy := fs.Int("redundancy", 0, "run on N peers and take the majority (>=2 enables verification)")
 	_ = fs.Parse(args)
 	rest := fs.Args()
 	if len(rest) == 0 {
-		fmt.Fprintln(os.Stderr, `usage: swarmai run "your prompt"`)
+		fmt.Fprintln(os.Stderr, `usage: swarmai run "your prompt" [--redundancy N]`)
 		os.Exit(2)
 	}
 	prompt := rest[0]
-	u := fmt.Sprintf("http://%s/run?prompt=%s&model=%s",
-		control.DefaultControlAddr(*port), url.QueryEscape(prompt), url.QueryEscape(*model))
+	u := fmt.Sprintf("http://%s/run?prompt=%s&model=%s&redundancy=%d",
+		control.DefaultControlAddr(*port), url.QueryEscape(prompt), url.QueryEscape(*model), *redundancy)
+	fmt.Println(prettyJSON(get(u)))
+}
+
+// cmdDraft answers a prompt with draft->verify (M2): draft locally, verify on a peer.
+func cmdDraft(args []string) {
+	fs := flag.NewFlagSet("draft", flag.ExitOnError)
+	port := fs.Int("port", 4779, "node port whose control api to query")
+	model := fs.String("model", "", "model the verifier should use")
+	_ = fs.Parse(args)
+	rest := fs.Args()
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, `usage: swarmai draft "your prompt"`)
+		os.Exit(2)
+	}
+	u := fmt.Sprintf("http://%s/draft?prompt=%s&model=%s",
+		control.DefaultControlAddr(*port), url.QueryEscape(rest[0]), url.QueryEscape(*model))
 	fmt.Println(prettyJSON(get(u)))
 }
 

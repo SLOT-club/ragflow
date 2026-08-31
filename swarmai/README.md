@@ -30,6 +30,14 @@ Modulo Go autonomo (non tocca la build nativa di RAGFlow). Costruito su [libp2p]
   espone mai**: il worker lega `rpc-server` a loopback e il coordinatore ci arriva **dentro lo stream
   libp2p autenticato**, con `--tensor-split` calcolato dalla RAM libera dei membri. Verificato: byte
   instradati coordinatore→libp2p→worker e ritorno.
+- **Draft→verify (M2)** (`internal/verify`, protocollo `/swarmai/verify/1.0.0`). Il nodo debole genera
+  una bozza col suo modello piccolo; un peer più forte la **verifica o corregge in un solo giro** (su
+  WAN ammortizza la latenza: un round-trip per tutta la bozza, non uno per token). Verificato end-to-end.
+- **Fiducia locale** (`internal/trust`): ledger **kudos** (crediti non-monetari per lavoro utile, stile
+  AI-Horde) + **reputazione** (tasso di accordo). L'**esecuzione ridondante N-di-M** manda la stessa
+  richiesta a più peer, prende la maggioranza, accredita chi concorda e segna chi diverge (stile BOINC);
+  la reputazione modula la **replica adattiva** (peer nuovi più controllati, peer provati meno).
+  Verificato: 2 verificatori concordi, entrambi accreditati.
 
 ## Build
 ```bash
@@ -54,6 +62,9 @@ Interrogare e usare la rete:
 swarmai status                 # scheda e indirizzi di questo nodo
 swarmai peers                  # capacità dei peer scoperti
 swarmai run "quanto fa 2+2"    # instradato al miglior nodo capace
+swarmai run "domanda" --redundancy 3   # esegue su 3 peer e prende la maggioranza
+swarmai draft "quanto fa 6x7"  # bozza locale, verificata/corretta da un peer forte (M2)
+swarmai credits                # ledger locale: crediti + accordo per peer
 ```
 
 Condividere e streamare un modello fra nodi:
@@ -88,18 +99,22 @@ curl "http://127.0.0.1:4780/run?prompt=ciao"   # A (senza modello) -> servito da
 1. **Fetch on-demand per esperto** (non a file intero): chunking content-defined (GearHash) per dedup
    fra quantizzazioni, e richiesta dei soli esperti/layer attivi con prefetch predittivo. Basi già qui
    (`internal/blob`, `/swarmai/blob/1.0.0`).
-2. **Draft→verify (M2)**: il nodo povero manda la bozza locale, un super-nodo la verifica in batch.
-3. **Fiducia stadiata**: PeerID Noise + PSK per la cellula di amici; poi esecuzione ridondante N-di-3 +
-   replica adattiva (BOINC), kudos (AI-Horde), TOPLOC per lo swarm pubblico; sandbox seccomp/wasmtime.
+2. **Riabilitare QUIC** aggiornando go-libp2p/quic-go (oggi TCP-only per aggirare un panic di quic-go
+   sotto Go 1.26); poi PSK/pnet per la cella di amici e TOPLOC per lo swarm pubblico.
+3. **Sandbox** dei task non fidati (seccomp/Landlock attorno all'inferenza, wasmtime per il codice di
+   orchestrazione) e **costo d'identità** anti-Sybil per lo swarm aperto.
 4. **Nodo browser via WebRTC (M12)**.
 
-(La cellula LAN via llama.cpp RPC col tunnel sicuro è **già implementata** — vedi sopra.)
+(Cellula LAN via llama.cpp RPC, Draft→verify M2, e fiducia locale — kudos + ridondanza + reputazione —
+sono **già implementati e verificati**, vedi sopra.)
 
 ## Architettura (file)
 - `main.go` — CLI (`node start`, `peers`, `status`, `run`, `model share|fetch|list`).
-- `internal/node/` — host libp2p, scoperta, gossip delle capacità, registro dei peer, protocollo infer
-  (`infer.go`) e protocollo di streaming dei pesi (`stream.go`).
+- `internal/node/` — host libp2p, scoperta, gossip, registro peer, protocollo infer (`infer.go`) +
+  esecuzione ridondante, streaming dei pesi (`stream.go`), draft→verify (`speculative.go`).
 - `internal/blob/` — chunking content-addressed e chunk store locale.
 - `internal/cell/` — cellula LAN via llama.cpp RPC + tunnel sicuro loopback↔libp2p.
+- `internal/verify/` — pattern draft→verify (M2): prompt di verifica e interpretazione del verdetto.
+- `internal/trust/` — ledger kudos + reputazione (replica adattiva).
 - `internal/backend/` — backend d'inferenza (`llama-server`, stub).
 - `internal/control/` — control API loopback per la CLI.

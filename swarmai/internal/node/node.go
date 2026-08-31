@@ -17,6 +17,7 @@ import (
 	"github.com/slot-club/swarmai/internal/backend"
 	"github.com/slot-club/swarmai/internal/blob"
 	"github.com/slot-club/swarmai/internal/cell"
+	"github.com/slot-club/swarmai/internal/trust"
 
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -27,6 +28,7 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
+	tcp "github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -59,6 +61,7 @@ type Node struct {
 	topic    *pubsub.Topic
 	reg      *Registry
 	blobs    *blob.Store
+	credits  *trust.Ledger
 	backend  backend.Backend
 	name     string
 	schedule string
@@ -75,13 +78,15 @@ func New(ctx context.Context, cfg Config) (*Node, error) {
 	}
 
 	port := cfg.ListenPort
-	listen := []string{
-		fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port),
-		fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", port),
-	}
+	// TCP-only transport with Noise security. QUIC is intentionally disabled:
+	// the quic-go version pinned by this go-libp2p release panics under Go 1.26
+	// ("where's my session ticket?"). Re-enable QUIC once the dependency is
+	// upgraded. TCP + Noise works across LAN and WAN and through relays.
+	listen := []string{fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port)}
 
 	h, err := libp2p.New(
 		libp2p.Identity(priv),
+		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.ListenAddrStrings(listen...),
 		libp2p.NATPortMap(),
 		libp2p.EnableRelay(),
@@ -104,6 +109,7 @@ func New(ctx context.Context, cfg Config) (*Node, error) {
 		Host:     h,
 		reg:      NewRegistry(90 * time.Second),
 		blobs:    blob.NewStore(),
+		credits:  trust.NewLedger(),
 		backend:  be,
 		name:     cfg.Name,
 		schedule: sched,
@@ -111,6 +117,7 @@ func New(ctx context.Context, cfg Config) (*Node, error) {
 
 	h.SetStreamHandler(InferProtocol, n.handleInferStream)
 	h.SetStreamHandler(BlobProtocol, n.handleBlobStream)
+	h.SetStreamHandler(VerifyProtocol, n.handleVerifyStream)
 
 	if err := n.setupDHT(ctx, cfg.Bootstrap); err != nil {
 		return nil, err
@@ -341,6 +348,9 @@ func (n *Node) publishCard(ctx context.Context) {
 
 // Peers returns the current known capability cards (excluding self).
 func (n *Node) Peers() map[peer.ID]CapabilityCard { return n.reg.Snapshot() }
+
+// Credits returns this node's local reputation ledger snapshot.
+func (n *Node) Credits() []trust.Rep { return n.credits.Snapshot() }
 
 // SelfCard returns this node's current capability card.
 func (n *Node) SelfCard() CapabilityCard {

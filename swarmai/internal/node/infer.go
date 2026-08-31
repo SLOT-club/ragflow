@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/slot-club/swarmai/internal/backend"
@@ -87,9 +90,104 @@ func (n *Node) Run(ctx context.Context, req backend.Request) (backend.Result, st
 			// Fall back to local (even stub) rather than failing hard.
 			return n.backend.Infer(ctx, req), n.Host.ID().String() + " (local fallback)", err
 		}
+		n.credits.Earn(target, 1) // reward the peer that served us
 		return res, target.String(), nil
 	}
 
 	// No remote peer available: serve locally (stub if no model).
 	return n.backend.Infer(ctx, req), n.Host.ID().String() + " (local)", nil
+}
+
+// inferPeers returns up to want distinct infer-capable peers for a model,
+// most-free-RAM first.
+func (n *Node) inferPeers(model string, want int) []peer.ID {
+	type cand struct {
+		id   peer.ID
+		free uint64
+	}
+	var cands []cand
+	for id, c := range n.reg.Snapshot() {
+		if !c.CanInfer {
+			continue
+		}
+		if model != "" && c.Model != "" && c.Model != model {
+			continue
+		}
+		cands = append(cands, cand{id, c.RAMFreeMB})
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].free > cands[j].free })
+	out := make([]peer.ID, 0, want)
+	for i := 0; i < len(cands) && i < want; i++ {
+		out = append(out, cands[i].id)
+	}
+	return out
+}
+
+// RunRedundant sends the same request to up to `want` distinct infer-capable
+// peers, compares their answers, and returns the majority result. Peers in the
+// majority earn credit and an agreement; peers in the minority get a
+// disagreement. This is BOINC-style redundant-execution verification for an
+// open swarm where no single peer is trusted. Returns the chosen result and the
+// list of peers that produced it.
+func (n *Node) RunRedundant(ctx context.Context, req backend.Request, want int) (backend.Result, []string, error) {
+	if want < 2 {
+		res, by, err := n.Run(ctx, req)
+		return res, []string{by}, err
+	}
+	peers := n.inferPeers(req.Model, want)
+	if len(peers) == 0 {
+		res, by, err := n.Run(ctx, req)
+		return res, []string{by}, err
+	}
+
+	type answer struct {
+		id  peer.ID
+		res backend.Result
+	}
+	var mu sync.Mutex
+	var got []answer
+	var wg sync.WaitGroup
+	for _, p := range peers {
+		wg.Add(1)
+		go func(p peer.ID) {
+			defer wg.Done()
+			r, err := n.requestRemote(ctx, p, req)
+			if err != nil || r.Err != "" {
+				return
+			}
+			mu.Lock()
+			got = append(got, answer{p, r})
+			mu.Unlock()
+		}(p)
+	}
+	wg.Wait()
+
+	if len(got) == 0 {
+		return backend.Result{Err: "no peer answered"}, nil, fmt.Errorf("no peer answered")
+	}
+
+	// Majority by normalized answer text.
+	counts := map[string]int{}
+	for _, g := range got {
+		counts[strings.TrimSpace(g.res.Text)]++
+	}
+	bestText, best := "", -1
+	for t, c := range counts {
+		if c > best {
+			best, bestText = c, t
+		}
+	}
+
+	var servers []string
+	var chosen backend.Result
+	for _, g := range got {
+		agreed := strings.TrimSpace(g.res.Text) == bestText
+		n.credits.Agreement(g.id, agreed)
+		if agreed {
+			n.credits.Earn(g.id, 1)
+			servers = append(servers, g.id.String())
+			chosen = g.res
+		}
+	}
+	return chosen, servers, nil
 }

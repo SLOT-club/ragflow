@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,8 @@ func NewServer(n *node.Node, addr string) *Server {
 	mux.HandleFunc("/fetch", s.handleFetch)
 	mux.HandleFunc("/models", s.handleModels)
 	mux.HandleFunc("/cell/prepare", s.handleCellPrepare)
+	mux.HandleFunc("/draft", s.handleDraft)
+	mux.HandleFunc("/credits", s.handleCredits)
 	s.http = &http.Server{Addr: addr, Handler: mux}
 	return s
 }
@@ -67,15 +70,49 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
 
-	res, servedBy, err := s.node.Run(ctx, backend.Request{
-		Prompt: prompt,
-		Model:  r.URL.Query().Get("model"),
-	})
+	req := backend.Request{Prompt: prompt, Model: r.URL.Query().Get("model")}
+
+	// Redundant execution: fan out to N peers and take the majority.
+	if red := r.URL.Query().Get("redundancy"); red != "" {
+		if n, _ := strconv.Atoi(red); n >= 2 {
+			res, servers, err := s.node.RunRedundant(ctx, req, n)
+			resp := map[string]any{"result": res, "agreeing_peers": servers, "redundancy": n}
+			if err != nil {
+				resp["route_error"] = err.Error()
+			}
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+	}
+
+	res, servedBy, err := s.node.Run(ctx, req)
 	resp := map[string]any{"result": res, "served_by": servedBy}
 	if err != nil {
 		resp["route_error"] = err.Error()
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleDraft answers with draft→verify (M2): draft locally, verify on a peer.
+func (s *Server) handleDraft(w http.ResponseWriter, r *http.Request) {
+	prompt := r.URL.Query().Get("prompt")
+	if prompt == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing prompt"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+	v, servedBy, err := s.node.RunSpeculative(ctx, prompt, r.URL.Query().Get("model"))
+	resp := map[string]any{"verdict": v, "verified_by": servedBy}
+	if err != nil {
+		resp["route_error"] = err.Error()
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleCredits returns this node's local reputation ledger.
+func (s *Server) handleCredits(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.node.Credits())
 }
 
 // handleShare chunks a local file and starts seeding it, returning its manifest.
