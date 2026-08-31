@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/slot-club/swarmai/internal/blob"
+	"github.com/slot-club/swarmai/internal/gguf"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -192,9 +194,24 @@ func (n *Node) FetchModel(ctx context.Context, seeder peer.ID, manifestID, outPa
 	return m, nil
 }
 
-// ShareModel chunks and registers a local file for seeding, returning its manifest.
+// ShareModel chunks and registers a local file for seeding. If the file is a
+// GGUF model, its tensor layout is parsed and attached as a part→range map so
+// peers can fetch individual experts/layers on demand.
 func (n *Node) ShareModel(path, name string) (*blob.Manifest, error) {
-	return n.blobs.ShareFile(path, name)
+	m, err := n.blobs.ShareFile(path, name)
+	if err != nil {
+		return nil, err
+	}
+	if strings.HasSuffix(strings.ToLower(path), ".gguf") {
+		if layout, perr := gguf.Parse(path); perr == nil {
+			parts := make(map[string]blob.Range, len(layout.Tensors))
+			for _, t := range layout.Tensors {
+				parts[t.Name] = blob.Range{Offset: t.Start, Length: t.Size}
+			}
+			_ = n.blobs.AttachParts(m.ID, parts)
+		}
+	}
+	return m, nil
 }
 
 // LocalSeeds lists the manifests this node seeds.

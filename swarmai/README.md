@@ -34,6 +34,10 @@ Modulo Go autonomo (non tocca la build nativa di RAGFlow). Costruito su [libp2p]
   molto più grande della RAM resta usabile finché il working set entra nel budget. `Prefetch` scalda in
   anticipo gli esperti che il router MoE prevede. Verificato: fetch di un solo esperto con cache ≪
   dimensione del modello.
+- **Layout GGUF automatico** (`internal/gguf`): condividendo un `.gguf`, swarmai ne **legge la directory
+  dei tensori** (solo la testa del file, mai i dati) e allega da solo la mappa parte→intervallo, così il
+  fetch per-esperto usa i **nomi dei tensori reali** (`blk.0.ffn.experts.7`, …). Verificato end-to-end:
+  condivisione di un GGUF → parti derivate → fetch di un esperto per nome con byte esatti.
 - **Cellula LAN via llama.cpp RPC** (`internal/cell`, protocollo `/swarmai/rpc/1.0.0`). Più nodi fanno
   girare insieme un modello che non sta su una macchina sola. Punto critico di **sicurezza**: la porta
   di `rpc-server` non ha autenticazione e ha avuto una RCE (CVE-2026-34159), quindi swarmai **non la
@@ -113,23 +117,24 @@ curl "http://127.0.0.1:4780/run?prompt=ciao"   # A (senza modello) -> servito da
 ```
 
 ## Prossimi milestone (dal piano e dalla ricerca in `research/swarm-ai-tech-integration.md`)
-1. **Parser di layout GGUF**: derivare automaticamente la mappa parte→intervallo dai tensori di un
-   `.gguf` (oggi la mappa si passa a mano a `ShareModelWithParts`), e **integrare il prefetch col router
-   MoE** reale così gli esperti del prossimo token arrivano prima che servano.
+1. **Integrare il prefetch col router MoE reale**: agganciare `Prefetch` alle attivazioni degli esperti
+   di `llama-server` (o del backend) così gli esperti del prossimo token si streamano prima di servire.
+   Il layout GGUF che dice *dove* sta ogni esperto è **già fatto** (`internal/gguf`).
 2. **Riabilitare QUIC** aggiornando go-libp2p/quic-go (oggi TCP-only per aggirare un panic di quic-go
    sotto Go 1.26); poi PSK/pnet per la cella di amici e TOPLOC per lo swarm pubblico.
 3. **Sandbox** dei task non fidati (seccomp/Landlock attorno all'inferenza, wasmtime per il codice di
    orchestrazione) e **costo d'identità** anti-Sybil per lo swarm aperto.
 4. **Nodo browser via WebRTC (M12)**.
 
-(Cellula LAN via llama.cpp RPC, Draft→verify M2, fiducia locale, chunking CDC e fetch on-demand per
-esperto con cache LRU sono **già implementati e verificati**, vedi sopra.)
+(Cellula LAN via llama.cpp RPC, Draft→verify M2, fiducia locale, chunking CDC, fetch on-demand per
+esperto con cache LRU e layout GGUF automatico sono **già implementati e verificati**, vedi sopra.)
 
 ## Architettura (file)
 - `main.go` — CLI (`node start`, `peers`, `status`, `run`, `model share|fetch|list`).
 - `internal/node/` — host libp2p, scoperta, gossip, registro peer, protocollo infer (`infer.go`) +
   esecuzione ridondante, streaming dei pesi (`stream.go`), draft→verify (`speculative.go`).
 - `internal/blob/` — chunking content-defined (GearHash), chunk store, cache LRU degli esperti.
+- `internal/gguf/` — parser del layout dei tensori GGUF (mappa parte→intervallo).
 - `internal/node/expert.go` — fetch on-demand per parte + prefetch + gerarchia cache→disco→rete.
 - `internal/cell/` — cellula LAN via llama.cpp RPC + tunnel sicuro loopback↔libp2p.
 - `internal/verify/` — pattern draft→verify (M2): prompt di verifica e interpretazione del verdetto.
