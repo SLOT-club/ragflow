@@ -28,6 +28,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -134,28 +135,57 @@ func autoStart() {
 	fmt.Println("\nswarmai fermato.")
 }
 
-// detectLocalLlama probes the usual OpenAI-compatible endpoints for a running
-// llama-server / LM Studio / Ollama and returns the first that answers.
+// detectLocalLlama finds a running OpenAI-compatible model server on this
+// machine, whatever desktop app hosts it. It honours $SWARMAI_LLAMA_URL first,
+// then probes the common local ports concurrently: llama.cpp (8080/8081),
+// LM Studio (1234), Ollama (11434), Jan (1337), GPT4All (4891), and a few
+// generic ones. Returns the responder with the highest priority, or "".
 func detectLocalLlama() string {
-	cands := []string{}
 	if u := os.Getenv("SWARMAI_LLAMA_URL"); u != "" {
-		cands = append(cands, strings.TrimRight(u, "/"))
-	}
-	cands = append(cands,
-		"http://127.0.0.1:8080", "http://127.0.0.1:8081",
-		"http://127.0.0.1:1234", "http://127.0.0.1:11434")
-	cl := &http.Client{Timeout: 2 * time.Second}
-	for _, u := range cands {
-		resp, err := cl.Get(u + "/v1/models")
-		if err != nil {
-			continue
-		}
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
+		u = strings.TrimRight(u, "/")
+		if probeOpenAI(u) {
 			return u
 		}
 	}
-	return ""
+	// Listed in priority order (dedicated LLM servers before generic ports).
+	ports := []int{8080, 8081, 1234, 11434, 1337, 4891, 8000, 5000, 5001, 3000, 8888}
+	type hit struct {
+		rank int
+		url  string
+	}
+	found := make(chan hit, len(ports))
+	var wg sync.WaitGroup
+	for i, p := range ports {
+		wg.Add(1)
+		go func(rank, port int) {
+			defer wg.Done()
+			u := fmt.Sprintf("http://127.0.0.1:%d", port)
+			if probeOpenAI(u) {
+				found <- hit{rank, u}
+			}
+		}(i, p)
+	}
+	go func() { wg.Wait(); close(found) }()
+
+	best := hit{rank: 1 << 30}
+	for h := range found {
+		if h.rank < best.rank {
+			best = h
+		}
+	}
+	return best.url
+}
+
+// probeOpenAI reports whether an OpenAI-compatible server answers /v1/models
+// at base with HTTP 200.
+func probeOpenAI(base string) bool {
+	cl := &http.Client{Timeout: 900 * time.Millisecond}
+	resp, err := cl.Get(base + "/v1/models")
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 // firstLANIP returns this machine's first non-loopback IPv4 address, for the
