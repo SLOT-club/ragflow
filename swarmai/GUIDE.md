@@ -83,6 +83,23 @@ Chiavi condivise di scoperta e gossip:
 
 > Tutti i comandi usano la porta di default del nodo `4779` (TCP+QUIC). La control API sta su `4779+1 = 4780`, loopback. Cambiando `--port P` sul nodo, la control API diventa `P+1`.
 
+### (0) Il modo più semplice: un solo comando, ruolo automatico
+
+Nel repo ci sono due launcher identici che capiscono **da soli** il ruolo del PC: se trovano un `llama-server` locale il PC diventa **host** (serve lo swarm + pagina web su `:8090`), altrimenti diventa **nodo** che usa lo swarm sulla LAN. Si lancia lo stesso identico comando su ogni dispositivo:
+
+```bash
+./swarm.sh            # Linux / macOS (anche Git Bash o WSL su Windows)
+.\swarm.ps1           # Windows (PowerShell)
+# su una rete che blocca il multicast mDNS, passa il token stampato dall'host:
+./swarm.sh <TOKEN>
+```
+
+Il launcher compila il binario al primo avvio (serve Go, oppure si copia il file `swarmai`/`swarmai.exe` già compilato da un PC gemello con lo stesso OS). Rileva il modello sondando gli endpoint OpenAI comuni (`127.0.0.1:8080/8081/1234/11434`, o `$SWARMAI_LLAMA_URL`).
+
+**Per SOLO usare lo swarm** da un altro PC o da un telefono non serve nemmeno il launcher: apri il browser su `http://<IP-DELL-HOST>:8090`. Nessuna installazione.
+
+Le sezioni (a)–(e) sotto spiegano cosa fa il launcher sotto il cofano, comando per comando.
+
 ### (a) Ho un llama-server: divento nodo-modello
 
 Prerequisito: un `llama-server` (o qualsiasi endpoint OpenAI-compatibile) in ascolto, es. su `http://127.0.0.1:8080`, che espone `/health`, `/v1/models`, `/v1/chat/completions`.
