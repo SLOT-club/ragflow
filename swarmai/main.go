@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,6 +28,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/slot-club/swarmai/internal/backend"
 	"github.com/slot-club/swarmai/internal/control"
@@ -37,10 +39,9 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		usage()
-		fmt.Fprintln(os.Stderr, "\nNon avviare swarmai direttamente con un doppio-clic: usa \"swarm.bat\" (o l'icona \"Swarm AI\" sul desktop), che sceglie il ruolo giusto da solo.")
-		pauseIfConsole()
-		os.Exit(2)
+		// Double-click with no subcommand: just do the sensible thing.
+		autoStart()
+		return
 	}
 	switch os.Args[1] {
 	case "node":
@@ -70,6 +71,99 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+// autoStart runs when swarmai is launched with no subcommand (a double-click).
+// It needs zero configuration: it detects a local model and picks the role by
+// itself, serves the web UI on :8090, and keeps running so the window stays open.
+func autoStart() {
+	llama := detectLocalLlama()
+	var be backend.Backend = backend.Stub{}
+	role := "NODO — nessun modello qui: uso lo swarm sulla rete locale"
+	if llama != "" {
+		be = backend.NewLlamaServer(llama, "")
+		role = "HOST — questo PC ha il modello e serve lo swarm"
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	n, err := node.New(ctx, node.Config{Name: hostname(), ListenPort: 4779, Backend: be, Schedule: "always"})
+	if err != nil {
+		fmt.Println("\nNon riesco ad avviare swarmai:", err)
+		fmt.Println("(Spesso è la porta 4779 o 8090 già in uso, o l'antivirus che blocca il programma.)")
+		pauseIfConsole()
+		os.Exit(1)
+	}
+	defer n.Close()
+
+	ctrlAddr := control.DefaultControlAddr(4779)
+	go func() {
+		if err := control.NewServer(n, ctrlAddr).ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("control api: %v", err)
+		}
+	}()
+	go func() {
+		if err := gateway.NewServer(n, ":8090").ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("web ui: %v", err)
+		}
+	}()
+
+	ip := firstLANIP()
+	fmt.Println("==================================================================")
+	fmt.Println("  swarmai è attivo.")
+	fmt.Println("  Ruolo:", role)
+	fmt.Println()
+	fmt.Printf("  Apri lo swarm nel browser:   http://%s:8090\n", ip)
+	fmt.Println("  (da questo PC va bene anche  http://localhost:8090 )")
+	if llama != "" {
+		fmt.Println()
+		fmt.Println("  Altri PC/telefoni: apri quell'indirizzo, non devono installare nulla.")
+	}
+	fmt.Println()
+	fmt.Println("  Lascia questa finestra aperta. Per fermare: chiudila o premi Ctrl+C.")
+	fmt.Println("==================================================================")
+
+	<-ctx.Done()
+	fmt.Println("\nswarmai fermato.")
+}
+
+// detectLocalLlama probes the usual OpenAI-compatible endpoints for a running
+// llama-server / LM Studio / Ollama and returns the first that answers.
+func detectLocalLlama() string {
+	cands := []string{}
+	if u := os.Getenv("SWARMAI_LLAMA_URL"); u != "" {
+		cands = append(cands, strings.TrimRight(u, "/"))
+	}
+	cands = append(cands,
+		"http://127.0.0.1:8080", "http://127.0.0.1:8081",
+		"http://127.0.0.1:1234", "http://127.0.0.1:11434")
+	cl := &http.Client{Timeout: 2 * time.Second}
+	for _, u := range cands {
+		resp, err := cl.Get(u + "/v1/models")
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return u
+		}
+	}
+	return ""
+}
+
+// firstLANIP returns this machine's first non-loopback IPv4 address, for the
+// URL other devices should open. Falls back to a placeholder.
+func firstLANIP() string {
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() {
+			if v4 := ipn.IP.To4(); v4 != nil && !v4.IsLinkLocalUnicast() {
+				return v4.String()
+			}
+		}
+	}
+	return "<IP-di-questo-PC>"
 }
 
 func usage() {
