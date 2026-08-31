@@ -29,6 +29,7 @@ import (
 
 	"github.com/slot-club/swarmai/internal/backend"
 	"github.com/slot-club/swarmai/internal/control"
+	"github.com/slot-club/swarmai/internal/gateway"
 	"github.com/slot-club/swarmai/internal/invite"
 	"github.com/slot-club/swarmai/internal/node"
 )
@@ -190,6 +191,7 @@ func cmdNode(args []string) {
 	tags := fs.String("tags", "", "comma-separated domains this model is good at (e.g. code,math)")
 	join := fs.String("join", "", "join token from `swarmai invite` on an existing node")
 	relay := fs.Bool("relay", false, "act as a public circuit relay for NAT'd peers")
+	gwAddr := fs.String("gateway", "", "serve a zero-install web UI on this address (e.g. :8090)")
 	var bootstrap, relays multiFlag
 	fs.Var(&bootstrap, "bootstrap", "extra bootstrap peer multiaddr (repeatable)")
 	fs.Var(&relays, "relays", "known relay multiaddr to reserve a circuit through (repeatable)")
@@ -248,11 +250,25 @@ func cmdNode(args []string) {
 		}
 	}()
 
+	var gw *gateway.Server
+	if *gwAddr != "" {
+		gw = gateway.NewServer(n, *gwAddr)
+		go func() {
+			fmt.Printf("  web ui:      http://%s\n", *gwAddr)
+			if err := gw.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("gateway: %v", err)
+			}
+		}()
+	}
+
 	<-ctx.Done()
 	fmt.Println("\nshutting down…")
 	sctx, cancel := context.WithTimeout(context.Background(), 5e9)
 	defer cancel()
 	_ = srv.Shutdown(sctx)
+	if gw != nil {
+		_ = gw.Shutdown(sctx)
+	}
 }
 
 func cmdQuery(path string, args []string) {

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>swarmai</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#ffffff; --ink:#111418; --muted:#5b6470; --line:#e5e8ec;
+    --accent:#2f6df6; --accent-ink:#ffffff; --good:#1a7f4b; --warn:#b25e00; --chip:#eef1f5;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0f1216; --panel:#161b22; --ink:#e8ebef; --muted:#9aa4b0; --line:#262c34;
+      --accent:#4f86ff; --accent-ink:#0b0e12; --good:#4fd08a; --warn:#e0a35b; --chip:#1e242c;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:760px;margin:0 auto;padding:20px 16px 60px}
+  header{display:flex;align-items:baseline;gap:10px;margin:8px 0 4px}
+  h1{font-size:20px;margin:0;letter-spacing:.2px}
+  .tag{color:var(--muted);font-size:13px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0}
+  .row{display:flex;gap:8px}
+  textarea{flex:1;resize:vertical;min-height:64px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit}
+  button{border:0;border-radius:10px;padding:0 18px;background:var(--accent);color:var(--accent-ink);font:600 15px/1 inherit;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  .answer{white-space:pre-wrap;font-size:16px;margin:2px 0 10px}
+  .meta{display:flex;flex-wrap:wrap;gap:6px;font-size:12px;color:var(--muted)}
+  .chip{background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:3px 9px}
+  .conf-verified{color:var(--good)} .conf-adjudicated{color:var(--warn)} .conf-unchecked{color:var(--muted)}
+  .peers{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .peer{background:var(--chip);border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:13px}
+  .peer b{font-weight:600} .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--good);margin-right:6px;vertical-align:middle}
+  .muted{color:var(--muted)} .err{color:var(--warn)}
+  footer{color:var(--muted);font-size:12px;margin-top:18px;text-align:center}
+  code{background:var(--chip);padding:1px 5px;border-radius:5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><h1>swarmai</h1><span class="tag">nodo browser · usa lo swarm</span></header>
+
+  <div class="panel">
+    <div class="row">
+      <textarea id="q" placeholder="Fai una domanda… (es. dimostra passo passo perché 6×7=42)"></textarea>
+      <button id="ask">Chiedi</button>
+    </div>
+    <div id="out" class="muted" style="margin-top:12px">La risposta viene instradata al modello migliore e verificata da un altro modello.</div>
+  </div>
+
+  <div class="panel">
+    <div class="muted" id="statusline">Connessione…</div>
+    <div class="peers" id="peers"></div>
+  </div>
+
+  <footer>Nodo consumatore a installazione zero. Contribuire con calcolo dal browser (WebGPU) è il passo successivo.</footer>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+async function jget(u){ const r = await fetch(u); return r.json(); }
+
+async function refreshStatus(){
+  try{
+    const s = await jget('/api/status');
+    const peers = s.peers || [];
+    const models = peers.filter(p=>p.can_infer);
+    $('#statusline').innerHTML = `<span class="dot"></span>Questo nodo: <b>${s.self.name||'?'}</b> · `
+      + `${peers.length} peer connessi · ${models.length} con modello`;
+    $('#peers').innerHTML = peers.length ? peers.map(p=>{
+      const tags = (p.tags||[]).join(', ');
+      const badge = p.can_infer ? `<b>${p.model||'modello'}</b>${p.tier?` · ${p.tier}`:''}${tags?` · ${tags}`:''}` : 'seeder/relay';
+      return `<div class="peer">${p.name||'nodo'} — ${badge}</div>`;
+    }).join('') : '<span class="muted">Nessun peer ancora. Collega un altro dispositivo con un token d\'invito.</span>';
+  }catch(e){ $('#statusline').innerHTML = '<span class="err">Gateway non raggiungibile</span>'; }
+}
+
+async function ask(){
+  const q = $('#q').value.trim(); if(!q) return;
+  $('#ask').disabled = true; $('#out').innerHTML = '<span class="muted">Sto pensando…</span>';
+  try{
+    const r = await jget('/api/ask?prompt='+encodeURIComponent(q));
+    if(r.error){ $('#out').innerHTML = '<span class="err">'+r.error+'</span>'; }
+    else{
+      const cc = 'conf-'+(r.confidence||'unchecked');
+      const meta = [
+        r.primary ? `<span class="chip">risposto da ${r.primary}</span>`:'',
+        r.verifier ? `<span class="chip">verificato da ${r.verifier}</span>`:'',
+        r.adjudicator ? `<span class="chip">arbitro ${r.adjudicator}</span>`:'',
+        r.domain ? `<span class="chip">${r.domain} · ${r.difficulty}</span>`:'',
+        `<span class="chip ${cc}">${r.confidence||'?'}</span>`,
+      ].filter(Boolean).join('');
+      $('#out').innerHTML = `<div class="answer">${escapeHtml(r.answer||'')}</div><div class="meta">${meta}</div>`;
+    }
+  }catch(e){ $('#out').innerHTML = '<span class="err">Errore di rete</span>'; }
+  $('#ask').disabled = false;
+}
+function escapeHtml(s){ return s.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+$('#ask').addEventListener('click', ask);
+$('#q').addEventListener('keydown', e=>{ if(e.key==='Enter' && (e.metaKey||e.ctrlKey)) ask(); });
+refreshStatus(); setInterval(refreshStatus, 4000);
+</script>
+</body>
+</html>
