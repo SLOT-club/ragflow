@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -64,14 +65,50 @@ type LlamaServer struct {
 	client    *http.Client
 }
 
-// NewLlamaServer builds a llama-server backend. model may be empty; it is only
-// advertised metadata.
+// NewLlamaServer builds a llama-server backend. If model is empty, the model
+// name is auto-detected from the server's /v1/models endpoint, so pointing
+// swarmai at a running llama-server is enough — no --model needed.
 func NewLlamaServer(baseURL, model string) *LlamaServer {
-	return &LlamaServer{
+	l := &LlamaServer{
 		BaseURL:   baseURL,
 		ModelName: model,
 		client:    &http.Client{Timeout: 5 * time.Minute},
 	}
+	if l.ModelName == "" {
+		l.ModelName = l.detectModel()
+	}
+	return l
+}
+
+// detectModel asks the server for the loaded model's id (OpenAI /v1/models).
+func (l *LlamaServer) detectModel() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, l.BaseURL+"/v1/models", nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var out struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || len(out.Data) == 0 {
+		return ""
+	}
+	id := out.Data[0].ID
+	if i := strings.LastIndexAny(id, `/\`); i >= 0 { // trim a path to a bare name
+		id = id[i+1:]
+	}
+	return id
 }
 
 func (l *LlamaServer) Name() string  { return "llama-server" }

@@ -17,6 +17,7 @@ import (
 	"github.com/slot-club/swarmai/internal/backend"
 	"github.com/slot-club/swarmai/internal/blob"
 	"github.com/slot-club/swarmai/internal/cell"
+	"github.com/slot-club/swarmai/internal/invite"
 	"github.com/slot-club/swarmai/internal/trust"
 
 	"github.com/libp2p/go-libp2p"
@@ -24,6 +25,7 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
@@ -72,6 +74,8 @@ type Node struct {
 	schedule string
 	tier     string
 	tags     []string
+
+	announceKick chan struct{}
 
 	mu    sync.Mutex
 	coord *cell.Coordinator
@@ -140,6 +144,12 @@ func New(ctx context.Context, cfg Config) (*Node, error) {
 	}
 	n.startDiscoveryAdvertise(ctx)
 	n.startCapabilityLoops(ctx)
+
+	// Announce promptly whenever a peer connects, so a freshly-joined node's
+	// capabilities propagate in ~a second instead of waiting for the 20s tick.
+	n.announceKick = make(chan struct{}, 1)
+	go n.announceLoop(ctx)
+	h.Network().Notify(&connNotifee{kick: n.announceKick})
 
 	if cfg.RPCWorker {
 		port := cfg.RPCPort
@@ -335,6 +345,37 @@ func (n *Node) startCapabilityLoops(ctx context.Context) {
 	}()
 }
 
+// announceLoop republishes the capability card shortly after a connection kick,
+// debounced by the single-slot channel so a burst of connects yields one announce.
+func (n *Node) announceLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-n.announceKick:
+			select {
+			case <-time.After(1200 * time.Millisecond):
+				n.publishCard(context.Background())
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+// connNotifee kicks an announce when a new connection is established.
+type connNotifee struct{ kick chan struct{} }
+
+func (c *connNotifee) Connected(network.Network, network.Conn) {
+	select {
+	case c.kick <- struct{}{}:
+	default:
+	}
+}
+func (c *connNotifee) Disconnected(network.Network, network.Conn)       {}
+func (c *connNotifee) Listen(network.Network, multiaddr.Multiaddr)      {}
+func (c *connNotifee) ListenClose(network.Network, multiaddr.Multiaddr) {}
+
 // publishCard gossips this node's current capability card.
 func (n *Node) publishCard(ctx context.Context) {
 	card := detectHost()
@@ -416,6 +457,10 @@ func (n *Node) Addrs() []string {
 	}
 	return out
 }
+
+// InviteToken encodes this node's dialable addresses into a compact join token
+// another device can use with `swarmai node start --join <token>`.
+func (n *Node) InviteToken() string { return invite.Encode(n.Addrs()) }
 
 // Close shuts the node down.
 func (n *Node) Close() error {

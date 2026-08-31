@@ -29,6 +29,7 @@ import (
 
 	"github.com/slot-club/swarmai/internal/backend"
 	"github.com/slot-club/swarmai/internal/control"
+	"github.com/slot-club/swarmai/internal/invite"
 	"github.com/slot-club/swarmai/internal/node"
 )
 
@@ -52,6 +53,8 @@ func main() {
 		cmdAsk(os.Args[2:])
 	case "credits":
 		cmdQuery("credits", os.Args[2:])
+	case "invite":
+		cmdQuery("invite", os.Args[2:])
 	case "model":
 		cmdModel(os.Args[2:])
 	case "cell":
@@ -76,6 +79,7 @@ Commands:
   ask "text"        combo: route by difficulty/domain, cross-check between models
   draft "text"      draft locally, verify/correct on a stronger peer (M2)
   credits           show the local reputation ledger (kudos + agreement)
+  invite            print a join token for another device to connect quickly
   model share PATH  chunk + seed a model file, print its manifest id
   model fetch ID    stream a whole model from a seeding peer (-o OUT)
   model part ID N   fetch only the chunks of one named part (expert/layer)
@@ -184,9 +188,18 @@ func cmdNode(args []string) {
 	rpcPort := fs.Int("rpc-port", 50052, "loopback port for the RPC worker")
 	tier := fs.String("tier", "", "model tier for ensemble routing: small|medium|large")
 	tags := fs.String("tags", "", "comma-separated domains this model is good at (e.g. code,math)")
+	join := fs.String("join", "", "join token from `swarmai invite` on an existing node")
 	var bootstrap multiFlag
 	fs.Var(&bootstrap, "bootstrap", "extra bootstrap peer multiaddr (repeatable)")
 	_ = fs.Parse(args[1:])
+
+	if *join != "" {
+		peers, err := invite.Decode(*join)
+		if err != nil {
+			log.Fatalf("--join: %v", err)
+		}
+		bootstrap = append(bootstrap, peers...)
+	}
 
 	var be backend.Backend = backend.Stub{}
 	if *llama != "" {

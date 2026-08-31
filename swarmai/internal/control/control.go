@@ -38,6 +38,7 @@ func NewServer(n *node.Node, addr string) *Server {
 	mux.HandleFunc("/part", s.handlePart)
 	mux.HandleFunc("/cache", s.handleCache)
 	mux.HandleFunc("/ask", s.handleAsk)
+	mux.HandleFunc("/invite", s.handleInvite)
 	s.http = &http.Server{Addr: addr, Handler: mux}
 	return s
 }
@@ -149,6 +150,16 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCache(w http.ResponseWriter, _ *http.Request) {
 	used, budget, count := s.node.ExpertCacheStats()
 	writeJSON(w, http.StatusOK, map[string]any{"used": used, "budget": budget, "chunks": count})
+}
+
+// handleInvite returns a join token another device can use to join the swarm.
+func (s *Server) handleInvite(w http.ResponseWriter, _ *http.Request) {
+	token := s.node.InviteToken()
+	writeJSON(w, http.StatusOK, map[string]string{
+		"token": token,
+		"join":  "swarmai node start --join " + token,
+		"addrs": strings.Join(s.node.Addrs(), " "),
+	})
 }
 
 // handleAsk answers as a routed, cross-checked ensemble ("combo").

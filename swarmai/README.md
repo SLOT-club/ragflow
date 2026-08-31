@@ -17,8 +17,9 @@ Modulo Go autonomo (non tocca la build nativa di RAGFlow). Costruito su [libp2p]
   locale non ha un modello, la richiesta viene instradata via P2P a chi ce l'ha (protocollo di stream
   `/swarmai/infer/1.0.0`), e la risposta torna con l'id del peer che l'ha servita.
 - **Backend d'inferenza**: adattatore `llama-server` (OpenAI-compatibile, con gli switch di compat —
-  `max_tokens`, niente ruolo `developer`, `enable_thinking:false`); i nodi senza modello usano lo stub e
-  restano utili come router/relay.
+  `max_tokens`, niente ruolo `developer`, `enable_thinking:false`); il **nome del modello è rilevato in
+  automatico** da `/v1/models`, quindi basta `--llama <url>`. I nodi senza modello usano lo stub e
+  restano utili come consumatori/router/seeder.
 - **Streaming dei pesi (Stremio-style)**: protocollo `/swarmai/blob/1.0.0`. Un modello è spezzato in
   chunk **content-defined (GearHash/FastCDC)** — i confini dipendono dal contenuto, non da offset fissi —
   ciascuno content-addressed (SHA-256), descritti da un manifest anch'esso content-addressed. Un nodo
@@ -127,6 +128,52 @@ HOME=/tmp/b swarmai node start --name B --port 4879 --llama http://127.0.0.1:808
   --bootstrap /ip4/127.0.0.1/tcp/4779/p2p/<PEER-ID-DI-A> &
 curl "http://127.0.0.1:4780/run?prompt=ciao"   # A (senza modello) -> servito da B
 ```
+
+## Aggiungere un dispositivo (onboarding rapido)
+
+Tre situazioni, nessuna richiede configurazione manuale di indirizzi.
+
+**1. Ho già un `llama-server`** (il caso "il mio server"). Basta puntarci swarmai: il modello viene
+rilevato da solo.
+```bash
+swarmai node start --llama http://127.0.0.1:8080 --tier medium --tags code,general
+```
+`--tier`/`--tags` sono facoltativi ma aiutano l'ensemble a instradare meglio.
+
+**2. PC o telefono debole, SENZA installare llama** (il caso "come mi collego in fretta"). Un nodo
+senza modello è comunque utile: **consuma** lo swarm (`ask`/`run`/`draft`) e può fare da **seeder**
+(distribuisce i pesi) e da **relay**. Nessun modello, nessuna installazione di llama.cpp.
+```bash
+swarmai node start            # nessun --llama: sei un nodo consumatore/seeder
+swarmai ask "una domanda"     # usa il calcolo dei peer
+```
+
+**Collegarsi in un secondo (token d'invito).** Su un nodo già attivo:
+```bash
+swarmai invite                # stampa un token e la riga pronta da incollare
+```
+Sull'altro dispositivo, incolla e basta — niente indirizzi da copiare a mano:
+```bash
+swarmai node start --join <TOKEN>
+```
+La card delle capacità si propaga in ~1 secondo (annuncio immediato alla connessione), quindi i nodi
+si vedono subito.
+
+### Telefono (Android)
+Il nodo è un **binario Go puro** (niente CGO): si compila per il telefono e si esegue in Termux.
+```bash
+GOOS=android GOARCH=arm64 go build -o swarmai .    # oppure GOOS=linux GOARCH=arm64 per Termux
+# copia il binario sul telefono, poi in Termux:
+./swarmai node start --join <TOKEN>
+```
+Così il telefono diventa nodo (consumatore + seeder) **senza installare nulla di pesante**. Per farlo
+anche *nodo-modello* servirebbe llama.cpp sul telefono (compilabile in Termux) — è **opzionale**.
+
+> Note: oggi il trasporto è **TCP + Noise** (QUIC in attesa di aggiornare la dipendenza), con
+> hole-punching e relay abilitati. In **LAN** i dispositivi si trovano da soli (mDNS) e il join è
+> immediato. Su **Internet pubblica** l'host dev'essere raggiungibile (relay/port-forward): i relay
+> pubblici sono nella roadmap. Il **nodo browser (WebRTC/WebGPU)**, l'onboarding a zero-installazione
+> per iOS/desktop, è anch'esso in roadmap.
 
 ## Prossimi milestone (dal piano e dalla ricerca in `research/swarm-ai-tech-integration.md`)
 1. **Integrare il prefetch col router MoE reale**: agganciare `Prefetch` alle attivazioni degli esperti
