@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/slot-club/swarmai/internal/backend"
+	"github.com/slot-club/swarmai/internal/blob"
 
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -50,6 +51,7 @@ type Node struct {
 	ps       *pubsub.PubSub
 	topic    *pubsub.Topic
 	reg      *Registry
+	blobs    *blob.Store
 	backend  backend.Backend
 	name     string
 	schedule string
@@ -91,12 +93,14 @@ func New(ctx context.Context, cfg Config) (*Node, error) {
 	n := &Node{
 		Host:     h,
 		reg:      NewRegistry(90 * time.Second),
+		blobs:    blob.NewStore(),
 		backend:  be,
 		name:     cfg.Name,
 		schedule: sched,
 	}
 
 	h.SetStreamHandler(InferProtocol, n.handleInferStream)
+	h.SetStreamHandler(BlobProtocol, n.handleBlobStream)
 
 	if err := n.setupDHT(ctx, cfg.Bootstrap); err != nil {
 		return nil, err
@@ -270,6 +274,7 @@ func (n *Node) publishCard(ctx context.Context) {
 	card.Model = n.backend.Model()
 	card.CanInfer = n.backend.Available() && n.backend.Name() != "stub"
 	card.Schedule = n.schedule
+	card.Seeds = n.blobs.Seeds()
 	card.UnixTime = time.Now().Unix()
 
 	data, err := json.Marshal(card)
@@ -293,7 +298,33 @@ func (n *Node) SelfCard() CapabilityCard {
 	card.Model = n.backend.Model()
 	card.CanInfer = n.backend.Available() && n.backend.Name() != "stub"
 	card.Schedule = n.schedule
+	card.Seeds = n.blobs.Seeds()
 	return card
+}
+
+// FetchModelAuto streams a model by manifest id, choosing a seeding peer. If
+// fromHint is a valid peer id it is tried first; otherwise the registry is
+// consulted for a peer advertising the manifest.
+func (n *Node) FetchModelAuto(ctx context.Context, manifestID, outPath, fromHint string, window int) (*blob.Manifest, string, error) {
+	var candidates []peer.ID
+	if fromHint != "" {
+		if pid, err := peer.Decode(fromHint); err == nil {
+			candidates = append(candidates, pid)
+		}
+	}
+	candidates = append(candidates, n.reg.SeedersFor(manifestID)...)
+	if len(candidates) == 0 {
+		return nil, "", fmt.Errorf("no peer is seeding manifest %s", manifestID)
+	}
+	var lastErr error
+	for _, pid := range candidates {
+		m, err := n.FetchModel(ctx, pid, manifestID, outPath, window)
+		if err == nil {
+			return m, pid.String(), nil
+		}
+		lastErr = err
+	}
+	return nil, "", lastErr
 }
 
 // Addrs returns the full multiaddrs another node can dial to reach this one.

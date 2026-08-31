@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/slot-club/swarmai/internal/blob"
+
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -16,18 +18,19 @@ import (
 // hardware it has, what it can serve, and under what resource policy. It is the
 // unit of "who can do what" in the swarm.
 type CapabilityCard struct {
-	PeerID     string `json:"peer_id"`
-	Name       string `json:"name"`
-	OS         string `json:"os"`
-	Arch       string `json:"arch"`
-	CPUs       int    `json:"cpus"`
-	RAMTotalMB uint64 `json:"ram_total_mb"`
-	RAMFreeMB  uint64 `json:"ram_free_mb"`
-	Backend    string `json:"backend"`   // "llama-server" | "stub"
-	Model      string `json:"model"`     // served model, if any
-	CanInfer   bool   `json:"can_infer"` // backend available now
-	Schedule   string `json:"schedule"`  // idle|night|always|manual
-	UnixTime   int64  `json:"unix_time"`
+	PeerID     string          `json:"peer_id"`
+	Name       string          `json:"name"`
+	OS         string          `json:"os"`
+	Arch       string          `json:"arch"`
+	CPUs       int             `json:"cpus"`
+	RAMTotalMB uint64          `json:"ram_total_mb"`
+	RAMFreeMB  uint64          `json:"ram_free_mb"`
+	Backend    string          `json:"backend"`   // "llama-server" | "stub"
+	Model      string          `json:"model"`     // served model, if any
+	CanInfer   bool            `json:"can_infer"` // backend available now
+	Schedule   string          `json:"schedule"`  // idle|night|always|manual
+	Seeds      []blob.SeedInfo `json:"seeds"`     // models this node seeds for streaming
+	UnixTime   int64           `json:"unix_time"`
 }
 
 // stale returns true if the card is older than ttl.
@@ -130,4 +133,23 @@ func (r *Registry) BestInferPeer(model string) (peer.ID, CapabilityCard, bool) {
 		}
 	}
 	return bestID, best, found
+}
+
+// SeedersFor returns peers currently seeding the given manifest id.
+func (r *Registry) SeedersFor(manifestID string) []peer.ID {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []peer.ID
+	for id, c := range r.cards {
+		if c.stale(r.ttl) {
+			continue
+		}
+		for _, s := range c.Seeds {
+			if s.ID == manifestID {
+				out = append(out, id)
+				break
+			}
+		}
+	}
+	return out
 }

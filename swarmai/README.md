@@ -19,6 +19,11 @@ Modulo Go autonomo (non tocca la build nativa di RAGFlow). Costruito su [libp2p]
 - **Backend d'inferenza**: adattatore `llama-server` (OpenAI-compatibile, con gli switch di compat —
   `max_tokens`, niente ruolo `developer`, `enable_thinking:false`); i nodi senza modello usano lo stub e
   restano utili come router/relay.
+- **Streaming dei pesi (Stremio-style)**: protocollo `/swarmai/blob/1.0.0`. Un modello è spezzato in
+  chunk content-addressed (SHA-256) descritti da un manifest anch'esso content-addressed. Un nodo
+  annuncia i modelli che seeda nella capability card; un altro li **streama a pezzi dai peer** con
+  finestra di prefetch, **verifica ogni chunk**, riassembla il file e a sua volta ridiventa seeder.
+  Verificato: fetch byte-identico di un modello via P2P.
 
 ## Build
 ```bash
@@ -44,6 +49,13 @@ swarmai status                 # scheda e indirizzi di questo nodo
 swarmai peers                  # capacità dei peer scoperti
 swarmai run "quanto fa 2+2"    # instradato al miglior nodo capace
 ```
+
+Condividere e streamare un modello fra nodi:
+```bash
+swarmai model share ./qwen3.5-4b-q6_k.gguf   # su un nodo: chunk + seed, stampa il manifest id
+swarmai model list                            # vedere chi seeda cosa
+swarmai model fetch <manifest-id> -o ./m.gguf # su un altro nodo: streama a pezzi dai peer, verifica
+```
 `peers`/`status`/`run` parlano con la control API locale del demone (`127.0.0.1:<porta+1>`).
 
 ## Prova a due nodi in locale
@@ -55,16 +67,22 @@ HOME=/tmp/b swarmai node start --name B --port 4879 --llama http://127.0.0.1:808
 curl "http://127.0.0.1:4780/run?prompt=ciao"   # A (senza modello) -> servito da B
 ```
 
-## Prossimi milestone (dal piano)
-1. **Streaming dei pesi stile Stremio** (`/swarmai/stream/1.0.0`): chunk content-addressed (CID),
-   richiesta on-demand degli esperti/layer attivi con prefetch predittivo — non scaricare i 2 TB.
-2. **Draft→verify (M2)**: il nodo povero manda la bozza locale, un super-nodo la verifica in batch.
-3. **Cellula LAN a pipeline** (prima.cpp-style) per far girare in casa modelli che non stanno su una
-   sola macchina.
-4. **Verifica a campione + reputazione (M11)** e **nodo browser via WebRTC (M12)**.
+## Prossimi milestone (dal piano e dalla ricerca in `research/swarm-ai-tech-integration.md`)
+1. **Fetch on-demand per esperto** (non a file intero): chunking content-defined (GearHash) per dedup
+   fra quantizzazioni, e richiesta dei soli esperti/layer attivi con prefetch predittivo. Basi già qui
+   (`internal/blob`, `/swarmai/blob/1.0.0`).
+2. **Cellula LAN via llama.cpp RPC** (`rpc-server`/`--rpc`): swarmai fa da control plane (scoperta,
+   `--tensor-split` dalle capability, membership per RTT) e **tunnela l'RPC nello stream libp2p
+   autenticato** — mai la porta TCP grezza (CVE-2026-34159, zero-auth).
+3. **Draft→verify (M2)**: il nodo povero manda la bozza locale, un super-nodo la verifica in batch.
+4. **Fiducia stadiata**: PeerID Noise + PSK per la cellula di amici; poi esecuzione ridondante N-di-3 +
+   replica adattiva (BOINC), kudos (AI-Horde), TOPLOC per lo swarm pubblico; sandbox seccomp/wasmtime.
+5. **Nodo browser via WebRTC (M12)**.
 
 ## Architettura (file)
-- `main.go` — CLI (`node start`, `peers`, `status`, `run`).
-- `internal/node/` — host libp2p, scoperta, gossip delle capacità, registro dei peer, protocollo infer.
+- `main.go` — CLI (`node start`, `peers`, `status`, `run`, `model share|fetch|list`).
+- `internal/node/` — host libp2p, scoperta, gossip delle capacità, registro dei peer, protocollo infer
+  (`infer.go`) e protocollo di streaming dei pesi (`stream.go`).
+- `internal/blob/` — chunking content-addressed e chunk store locale.
 - `internal/backend/` — backend d'inferenza (`llama-server`, stub).
 - `internal/control/` — control API loopback per la CLI.

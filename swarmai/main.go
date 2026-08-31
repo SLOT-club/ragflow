@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/slot-club/swarmai/internal/backend"
@@ -44,6 +45,8 @@ func main() {
 		cmdQuery("status", os.Args[2:])
 	case "run":
 		cmdRun(os.Args[2:])
+	case "model":
+		cmdModel(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -57,13 +60,59 @@ func usage() {
 	fmt.Fprint(os.Stderr, `swarmai — P2P hardware-sharing network for LLM inference
 
 Commands:
-  node start   start a node daemon (discovery + gossip + inference)
-  peers        list capability cards of discovered peers
-  status       show this node's own card and addresses
-  run "text"   answer a prompt using the best compute in the swarm
+  node start        start a node daemon (discovery + gossip + inference)
+  peers             list capability cards of discovered peers
+  status            show this node's own card and addresses
+  run "text"        answer a prompt using the best compute in the swarm
+  model share PATH  chunk + seed a model file, print its manifest id
+  model fetch ID    stream a model from a seeding peer (-o OUT)
+  model list        show models seeded locally and by peers
 
 Run "swarmai node start -h" for node flags.
 `)
+}
+
+func cmdModel(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: swarmai model [share|fetch|list] ...")
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "share":
+		fs := flag.NewFlagSet("model share", flag.ExitOnError)
+		port := fs.Int("port", 4779, "node port whose control api to use")
+		name := fs.String("name", "", "advertised model name (default: file basename)")
+		_ = fs.Parse(args[1:])
+		if fs.NArg() == 0 {
+			fmt.Fprintln(os.Stderr, "usage: swarmai model share <path> [--name N]")
+			os.Exit(2)
+		}
+		abs, _ := filepath.Abs(fs.Arg(0))
+		u := fmt.Sprintf("http://%s/share?path=%s&name=%s",
+			control.DefaultControlAddr(*port), url.QueryEscape(abs), url.QueryEscape(*name))
+		fmt.Println(prettyJSON(get(u)))
+	case "fetch":
+		fs := flag.NewFlagSet("model fetch", flag.ExitOnError)
+		port := fs.Int("port", 4779, "node port whose control api to use")
+		out := fs.String("o", "", "output file path (required)")
+		from := fs.String("from", "", "peer id to fetch from (optional; else any seeder)")
+		_ = fs.Parse(args[1:])
+		if fs.NArg() == 0 || *out == "" {
+			fmt.Fprintln(os.Stderr, "usage: swarmai model fetch <manifest-id> -o <out> [--from <peer>]")
+			os.Exit(2)
+		}
+		u := fmt.Sprintf("http://%s/fetch?id=%s&out=%s&from=%s",
+			control.DefaultControlAddr(*port), url.QueryEscape(fs.Arg(0)), url.QueryEscape(*out), url.QueryEscape(*from))
+		fmt.Println(prettyJSON(get(u)))
+	case "list":
+		fs := flag.NewFlagSet("model list", flag.ExitOnError)
+		port := fs.Int("port", 4779, "node port whose control api to use")
+		_ = fs.Parse(args[1:])
+		fmt.Println(prettyJSON(get(fmt.Sprintf("http://%s/models", control.DefaultControlAddr(*port)))))
+	default:
+		fmt.Fprintf(os.Stderr, "unknown model subcommand %q\n", args[0])
+		os.Exit(2)
+	}
 }
 
 func cmdNode(args []string) {

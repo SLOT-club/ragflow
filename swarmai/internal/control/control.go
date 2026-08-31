@@ -26,6 +26,9 @@ func NewServer(n *node.Node, addr string) *Server {
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/peers", s.handlePeers)
 	mux.HandleFunc("/run", s.handleRun)
+	mux.HandleFunc("/share", s.handleShare)
+	mux.HandleFunc("/fetch", s.handleFetch)
+	mux.HandleFunc("/models", s.handleModels)
 	s.http = &http.Server{Addr: addr, Handler: mux}
 	return s
 }
@@ -71,6 +74,53 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		resp["route_error"] = err.Error()
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleShare chunks a local file and starts seeding it, returning its manifest.
+func (s *Server) handleShare(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing path"})
+		return
+	}
+	m, err := s.node.ShareModel(path, r.URL.Query().Get("name"))
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
+}
+
+// handleFetch streams a model by manifest id from a seeding peer into a file.
+func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	out := r.URL.Query().Get("out")
+	if id == "" || out == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "need id and out"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+	defer cancel()
+	m, servedBy, err := s.node.FetchModelAuto(ctx, id, out, r.URL.Query().Get("from"), 8)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"manifest": m, "fetched_from": servedBy, "out": out})
+}
+
+// handleModels lists what this node seeds and what peers are seeding.
+func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {
+	remote := map[string]any{}
+	for id, c := range s.node.Peers() {
+		if len(c.Seeds) > 0 {
+			remote[id.String()] = c.Seeds
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"local":  s.node.LocalSeeds(),
+		"remote": remote,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
