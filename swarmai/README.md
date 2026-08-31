@@ -39,11 +39,16 @@ Modulo Go autonomo (non tocca la build nativa di RAGFlow). Costruito su [libp2p]
   la reputazione modula la **replica adattiva** (peer nuovi più controllati, peer provati meno).
   Verificato: 2 verificatori concordi, entrambi accreditati.
 
-## Build
+## Build e test
 ```bash
 cd swarmai
 go build -o swarmai .
+go test ./...     # unit + integrazione (nodi libp2p reali in-process)
 ```
+La suite copre: chunking/roundtrip dei pesi (`blob`), ledger e replica adattiva (`trust`),
+verdetto draft→verify (`verify`), il tunnel RPC sicuro e il tensor-split (`cell`), e un test
+d'integrazione end-to-end (`node`) che avvia più nodi, li fa scoprire via gossip e verifica routing
+del calcolo, streaming dei pesi byte-identico ed esecuzione ridondante con maggioranza.
 
 ## Uso
 Nodo con un modello (avvia prima un `llama-server` su :8080):

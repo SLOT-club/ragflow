@@ -352,6 +352,10 @@ func (n *Node) Peers() map[peer.ID]CapabilityCard { return n.reg.Snapshot() }
 // Credits returns this node's local reputation ledger snapshot.
 func (n *Node) Credits() []trust.Rep { return n.credits.Snapshot() }
 
+// AnnounceNow publishes this node's capability card immediately, instead of
+// waiting for the periodic tick. Useful right after connecting to a peer.
+func (n *Node) AnnounceNow() { n.publishCard(context.Background()) }
+
 // SelfCard returns this node's current capability card.
 func (n *Node) SelfCard() CapabilityCard {
 	card := detectHost()
