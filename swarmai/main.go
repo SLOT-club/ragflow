@@ -189,8 +189,10 @@ func cmdNode(args []string) {
 	tier := fs.String("tier", "", "model tier for ensemble routing: small|medium|large")
 	tags := fs.String("tags", "", "comma-separated domains this model is good at (e.g. code,math)")
 	join := fs.String("join", "", "join token from `swarmai invite` on an existing node")
-	var bootstrap multiFlag
+	relay := fs.Bool("relay", false, "act as a public circuit relay for NAT'd peers")
+	var bootstrap, relays multiFlag
 	fs.Var(&bootstrap, "bootstrap", "extra bootstrap peer multiaddr (repeatable)")
+	fs.Var(&relays, "relays", "known relay multiaddr to reserve a circuit through (repeatable)")
 	_ = fs.Parse(args[1:])
 
 	if *join != "" {
@@ -198,7 +200,10 @@ func cmdNode(args []string) {
 		if err != nil {
 			log.Fatalf("--join: %v", err)
 		}
+		// The inviter is both a bootstrap peer and a usable relay, so a NAT'd
+		// device that joins with a token is immediately reachable through it.
 		bootstrap = append(bootstrap, peers...)
+		relays = append(relays, peers...)
 	}
 
 	var be backend.Backend = backend.Stub{}
@@ -221,6 +226,8 @@ func cmdNode(args []string) {
 		RPCPort:      *rpcPort,
 		Tier:         *tier,
 		Tags:         splitCSV(*tags),
+		Relay:        *relay,
+		Relays:       relays,
 	})
 	if err != nil {
 		log.Fatalf("start node: %v", err)

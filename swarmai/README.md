@@ -11,6 +11,10 @@ Modulo Go autonomo (non tocca la build nativa di RAGFlow). Costruito su [libp2p]
 - **Identità persistente** per peer (Ed25519, stabile fra i riavvii).
 - **Trasporti** TCP + QUIC; NAT port-map, relay e hole-punching abilitati per la WAN.
 - **Scoperta**: mDNS in LAN (cellula di casa istantanea) + DHT Kademlia con rendezvous condiviso.
+- **Relay pubblico (Circuit Relay v2)**: un nodo raggiungibile può fare da **relay** (`--relay`); i nodi
+  dietro NAT (telefoni compresi) prenotano un circuito attraverso di esso e diventano **contattabili da
+  qualunque rete**, senza port-forward. Verificato: un peer dietro NAT viene raggiunto e servito su uno
+  stream solo tramite il relay.
 - **Gossip delle capacità** (GossipSub): ogni nodo pubblica una `CapabilityCard` (RAM, CPU, backend,
   modello servito, `can_infer`, politica di schedule).
 - **Routing del calcolo**: `swarmai run "..."` risponde usando il miglior peer capace — se il nodo
@@ -169,18 +173,31 @@ GOOS=android GOARCH=arm64 go build -o swarmai .    # oppure GOOS=linux GOARCH=ar
 Così il telefono diventa nodo (consumatore + seeder) **senza installare nulla di pesante**. Per farlo
 anche *nodo-modello* servirebbe llama.cpp sul telefono (compilabile in Termux) — è **opzionale**.
 
+### Raggiungibilità su Internet (relay pubblico)
+In **LAN** i dispositivi si trovano da soli (mDNS). Su **Internet pubblica** un dispositivo dietro NAT
+non è direttamente contattabile: serve un **relay**. Basta che *un* nodo raggiungibile (un VPS, o un PC
+con una porta aperta) faccia da relay:
+```bash
+swarmai node start --relay        # nodo relay pubblico
+swarmai invite                    # dà il token da distribuire
+```
+Chi si unisce con quel token **relaya automaticamente** attraverso l'invitante (il token è usato sia
+come bootstrap sia come relay), quindi un telefono dietro NAT diventa raggiungibile e servibile da
+chiunque, senza port-forward:
+```bash
+swarmai node start --join <TOKEN>   # NAT ok: prenota un circuito sul relay dell'invitante
+```
+
 > Note: oggi il trasporto è **TCP + Noise** (QUIC in attesa di aggiornare la dipendenza), con
-> hole-punching e relay abilitati. In **LAN** i dispositivi si trovano da soli (mDNS) e il join è
-> immediato. Su **Internet pubblica** l'host dev'essere raggiungibile (relay/port-forward): i relay
-> pubblici sono nella roadmap. Il **nodo browser (WebRTC/WebGPU)**, l'onboarding a zero-installazione
-> per iOS/desktop, è anch'esso in roadmap.
+> hole-punching e relay attivi. Il **nodo browser (WebRTC/WebGPU)** — onboarding a zero-installazione
+> per iOS/desktop — è in roadmap (dipende dalla riabilitazione di QUIC/WebRTC).
 
 ## Prossimi milestone (dal piano e dalla ricerca in `research/swarm-ai-tech-integration.md`)
 1. **Integrare il prefetch col router MoE reale**: agganciare `Prefetch` alle attivazioni degli esperti
    di `llama-server` (o del backend) così gli esperti del prossimo token si streamano prima di servire.
    Il layout GGUF che dice *dove* sta ogni esperto è **già fatto** (`internal/gguf`).
-2. **Riabilitare QUIC** aggiornando go-libp2p/quic-go (oggi TCP-only per aggirare un panic di quic-go
-   sotto Go 1.26); poi PSK/pnet per la cella di amici e TOPLOC per lo swarm pubblico.
+2. **Nodo browser (WebRTC/WebGPU)** per onboarding a zero-installazione, e **riabilitare QUIC**
+   aggiornando go-libp2p/quic-go (oggi TCP-only per aggirare un panic di quic-go sotto Go 1.26).
 3. **Sandbox** dei task non fidati (seccomp/Landlock attorno all'inferenza, wasmtime per il codice di
    orchestrazione) e **costo d'identità** anti-Sybil per lo swarm aperto.
 4. **Nodo browser via WebRTC (M12)**.

@@ -30,6 +30,7 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
+	relayv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	tcp "github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -57,6 +58,11 @@ type Config struct {
 	// Ensemble routing metadata about this node's model.
 	Tier string   // small|medium|large
 	Tags []string // domains this model is good at (code, math, …)
+
+	// Relay: be a public circuit relay for NAT'd peers. Relays: known relays to
+	// reserve a circuit through so this node is reachable from behind a NAT.
+	Relay  bool
+	Relays []string
 }
 
 // Node is a running swarmai peer.
@@ -95,16 +101,38 @@ func New(ctx context.Context, cfg Config) (*Node, error) {
 	// upgraded. TCP + Noise works across LAN and WAN and through relays.
 	listen := []string{fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port)}
 
-	h, err := libp2p.New(
+	opts := []libp2p.Option{
 		libp2p.Identity(priv),
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.ListenAddrStrings(listen...),
 		libp2p.NATPortMap(),
 		libp2p.EnableRelay(),
 		libp2p.EnableHolePunching(),
-	)
+	}
+	// Reserve circuits through known relays so this node is reachable from
+	// behind a NAT (AutoRelay advertises the resulting /p2p-circuit addresses).
+	var staticRelays []peer.AddrInfo
+	for _, r := range cfg.Relays {
+		if ai, aerr := parsePeerAddr(r); aerr == nil {
+			staticRelays = append(staticRelays, *ai)
+		}
+	}
+	if len(staticRelays) > 0 {
+		opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(staticRelays))
+	}
+
+	h, err := libp2p.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("new host: %w", err)
+	}
+
+	// Offer relay service to NAT'd peers when asked.
+	if cfg.Relay {
+		if _, rerr := relayv2.New(h); rerr != nil {
+			log.Printf("relay service: %v", rerr)
+		} else {
+			log.Printf("relay service active: this node relays for NAT'd peers")
+		}
 	}
 
 	be := cfg.Backend
