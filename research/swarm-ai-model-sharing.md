@@ -106,6 +106,71 @@ che è esattamente il prossimo prototipo.
 
 ---
 
+## 1-ter. «Rendere piccolo un modello enorme senza quantizzarlo»: il calcolo out-of-core
+
+La domanda — *ho un modello da 2 TB, posso farlo stare nella mia memoria piccola senza quantizzarlo?* —
+ha due risposte, e vanno tenute separate.
+
+**La verità scomoda (teoria dell'informazione).** *Residente* in 16 GB, senza perdere nulla: no. I pesi
+addestrati sono quasi massimamente entropici; la compressione lossless rende ~1,2–1,5×, non 100×. Solo
+i metodi *lossy* (quantizzazione, pruning, distillazione) riducono davvero l'informazione. Quindi
+"rimpicciolire e tenere tutto in RAM senza quantizzare" è impossibile — non per pigrizia ingegneristica,
+ma per fisica dell'informazione.
+
+**La riformulazione che dissolve il problema.** L'obiettivo non è *rimpicciolire* il modello, è
+*eseguirlo* in poca memoria. E questo è il problema più antico e più risolto dell'informatica: il
+**calcolo out-of-core** (memoria virtuale, database, streaming). Il modello vive su storage economico
+(un SSD da 2 TB costa ~100 €) e lo si fa *scorrere* attraverso una piccola finestra di RAM. Piena
+precisione, niente perso. La RAM smette di essere *un muro* e diventa *un quadrante*: non decide più la
+*fattibilità*, decide solo la *velocità*.
+
+**Perché l'inferenza è insolitamente adatta all'out-of-core** (quattro proprietà): l'accesso ai pesi è
+(1) in gran parte *sequenziale* (layer dopo layer), (2) *prevedibile* (dopo il layer N viene N+1),
+(3) *sparso* (MoE + sparsità di attivazione), (4) *locale* (il tuo benchmark: 37% per argomento). Sono
+esattamente le quattro proprietà che rendono efficiente lo streaming da disco.
+
+**Le leve lossless (oltre il MoE, oltre la quantizzazione):**
+
+1. **Weight streaming / offloading.** Pesi su NVMe, si carica in RAM un layer/esperto alla volta,
+   sovrapponendo caricamento e calcolo (ZeRO-Inference; `llama.cpp` mmap e lo streaming degli esperti
+   MoE da disco). È già ciò che la tua macchina fa col 35B-A3B. Lossless.
+2. **Sparsità di attivazione nei modelli DENSI** — la risposta "oltre il MoE". Anche un modello denso,
+   per un dato token, attiva pochissimi neuroni: ~80% dei neuroni FFN è inattivo (fino a >95% in certi
+   layer). Predicendo quali si attivano si carica dalla flash *solo quelli* (Apple "LLM in a Flash",
+   PowerInfer, CoreInfer). Apple ha fatto girare modelli grandi il doppio della DRAM: il footprint
+   *attivo* di un modello enorme è piccolo anche quando non è un MoE.
+3. **Swapping DRAM↔flash con preload cross-layer** — predici i pesi attivi del prossimo layer e caricali
+   mentre calcoli quello corrente, nascondendo la latenza della flash.
+4. **Paging della KV cache** — sui contesti lunghi il muro non sono i pesi ma la cache KV; la si pagina
+   come memoria virtuale (PagedAttention; KV su storage, InstInfer). Lossless.
+5. **Sparsità architetturale per costruzione** — modelli progettati perché il footprint attivo per token
+   sia minuscolo: PEER / *Mixture of a Million Experts* (retrieval product-key da milioni di
+   micro-esperti), Ultra-Sparse Memory Networks. È la direzione in cui il modello da 2 TB è per lo più
+   una tabella-memoria interrogata poche chiavi alla volta: "modello enorme, working set minuscolo"
+   diventa nativo.
+6. **Storage e banda collettivi (lo swarm).** Se lo storage/banda di *un* dispositivo non basta, la
+   cellula LAN e lo swarm sono storage e banda *collettivi*: il 2 TB è sharded, nessun nodo lo contiene
+   tutto, lo swarm sì (M3/M6). Lossless.
+
+**Il principio unificante — la "soluzione" che cerchi.**
+- La **fattibilità** è limitata dalla *capacità di storage* (banale: un SSD da 2 TB è economico), non
+  dalla RAM.
+- La **velocità** ≈ *banda_storage × hit-rate della cache*.
+- Il gioco ingegneristico quindi non è "rimpicciolire il modello" ma **"alzare l'hit-rate"** — con la
+  predizione della sparsità di attivazione, la località per argomento/esperto, il prefetch cross-layer,
+  il tenere residente il set caldo. Ogni punto di hit-rate ti avvicina alla velocità della RAM *senza
+  RAM*. Ed è tutto lossless, e **si somma alla quantizzazione**: le due leve non competono — la
+  quantizzazione rimpicciolisce ogni byte che streami, lo streaming gestisce il resto.
+
+**Dove si rompe (onestà).** La velocità è tappata dalla banda dello storage quando la località è bassa:
+se ogni token tocca parti casuali e lontane dei 2 TB, sei limitato dalla banda dell'SSD (~1–20 GB/s coi
+PCIe 5/6) e vai piano. Tutto l'approccio *vive o muore sulla località* — esattamente ciò che la tua
+misura mostra (37% on-topic = veloce; salto d'argomento = 33–57× più lento). Perciò la direzione di
+ricerca vera non è "più memoria" ma **"massimizzare e sfruttare la località prevedibile"**: è il
+predittore di M3, generalizzato dai soli esperti MoE a *ogni* peso attivo.
+
+---
+
 ## 2. Bibliografia valutata
 
 Ogni voce riporta cosa fa, i numeri chiave e il **limite** che le impedisce, da sola, di risolvere il
@@ -557,3 +622,13 @@ estensione del retrieval.
 [INTELLECT-2 (arXiv 2505.07291)](https://arxiv.org/html/2505.07291v1) ·
 [Distributed Deep Learning in Open Collaborations (arXiv 2106.10207)](https://arxiv.org/pdf/2106.10207) ·
 [Folding@home / BOINC — volunteer computing a scala exaFLOPS](https://www.techspot.com/community/topics/folding-home-now-has-access-to-over-470-petaflops-of-distributed-compute-power-to-research.261417/)
+
+**Out-of-core / memoria (base di §1-ter)**:
+[Apple — LLM in a Flash (arXiv 2312.11514, ICLR 2026)](https://machinelearning.apple.com/research/efficient-large-language) ·
+[Autoresearching "LLM in a Flash" per Qwen 397B locale (Simon Willison, 2026)](https://simonwillison.net/2026/Mar/18/llm-in-a-flash/) ·
+[Active-Weight Swapping DRAM↔Flash (arXiv 2504.08378)](https://arxiv.org/pdf/2504.08378) ·
+[CoreInfer — sparsità di attivazione adattiva (arXiv 2410.18311)](https://arxiv.org/pdf/2410.18311) ·
+[Endor — formato sparso per inferenza offloaded (arXiv 2406.11674)](https://arxiv.org/pdf/2406.11674) ·
+[Mixture of a Million Experts / PEER (arXiv 2407.04153)](https://arxiv.org/abs/2407.04153) ·
+[Ultra-Sparse Memory Network (arXiv 2411.12364)](https://arxiv.org/pdf/2411.12364) ·
+[llama.cpp — streaming esperti MoE da disco (PR #25294)](https://github.com/ggml-org/llama.cpp/pull/25294)
